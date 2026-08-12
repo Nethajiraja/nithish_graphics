@@ -111,25 +111,31 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({ info, to
             onClick={() => navigate('/admin/dashboard')}
             className="px-4 py-2 bg-orange-600 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer"
           >
-            Dashboard & Orders
+            Dashboard
           </button>
           <button
-            onClick={() => navigate('/admin/customers')}
+            onClick={() => navigate('/admin/services')}
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
           >
-            Customers Management
+            Services
           </button>
           <button
             onClick={() => navigate('/admin/pricing')}
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
           >
-            Pricing Matrix
+            Pricing
+          </button>
+          <button
+            onClick={() => navigate('/admin/customers')}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
+          >
+            Customers
           </button>
           <button
             onClick={() => navigate('/admin/settings')}
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
           >
-            Store Settings
+            Settings
           </button>
           <button
             onClick={onLogout}

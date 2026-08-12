@@ -9,7 +9,7 @@ interface AdminLoginPageProps {
 }
 
 export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ info, onLoginSuccess, navigate }) => {
-  const [email, setEmail] = useState('admin@nithishgraphics.com');
+  const [email, setEmail] = useState('nithishgraphics@admin');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -23,7 +23,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ info, onLoginSuc
       const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email: email.trim(), password })
       });
 
       const data = await res.json();
@@ -60,14 +60,14 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ info, onLoginSuc
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           <div>
             <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-              Admin Email Address
+              Admin ID / Email
             </label>
             <input
-              type="email"
+              type="text"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="e.g. admin@nithishgraphics.com"
+              placeholder="e.g. nithishgraphics@admin"
               className="w-full p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 font-semibold text-slate-900 text-xs"
             />
           </div>

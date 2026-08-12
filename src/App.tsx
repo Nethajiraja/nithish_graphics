@@ -23,6 +23,7 @@ import { CustomerDashboardPage } from './pages/customer/CustomerDashboardPage';
 // Admin Portal Pages
 import { AdminLoginPage } from './pages/admin/AdminLoginPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
+import { AdminServicesPage } from './pages/admin/AdminServicesPage';
 import { AdminPricingPage } from './pages/admin/AdminPricingPage';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage';
 import { AdminCustomersPage } from './pages/admin/AdminCustomersPage';
@@ -296,6 +297,25 @@ export default function App() {
       );
     }
 
+    if (currentPath === '/admin/services') {
+      if (!adminToken) {
+        return (
+          <AdminLoginPage
+            info={storeInfo}
+            onLoginSuccess={(token) => setAdminToken(token)}
+            navigate={navigate}
+          />
+        );
+      }
+      return (
+        <AdminServicesPage
+          info={storeInfo}
+          adminToken={adminToken}
+          navigate={navigate}
+        />
+      );
+    }
+
     if (currentPath === '/admin/customers') {
       if (!adminToken) {
         return (
@@ -355,6 +375,18 @@ export default function App() {
           navigate={navigate}
         />
       );
+    }
+
+    if (currentPath.startsWith('/admin')) {
+      if (!adminToken) {
+        return (
+          <AdminLoginPage
+            info={storeInfo}
+            onLoginSuccess={(token) => setAdminToken(token)}
+            navigate={navigate}
+          />
+        );
+      }
     }
 
     // Default Fallback to Homepage

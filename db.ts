@@ -28,6 +28,18 @@ const PRICING_FILE = path.join(FALLBACK_DIR, 'pricing.json');
 const SETTINGS_FILE = path.join(FALLBACK_DIR, 'settings.json');
 const ADMINS_FILE = path.join(FALLBACK_DIR, 'admins.json');
 const USERS_FILE = path.join(FALLBACK_DIR, 'users.json');
+const SERVICES_FILE = path.join(FALLBACK_DIR, 'services.json');
+
+const INITIAL_SERVICES_DATA = [
+  { id: 1, name: 'B/W Printing', description: 'Black and white document printing', price: 2, pricing_unit: 'Per Page', is_active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+  { id: 2, name: 'Color Printing', description: 'Vibrant color document printing', price: 6, pricing_unit: 'Per Page', is_active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+  { id: 3, name: 'Spiral Binding', description: 'Durable plastic coil binding with clear protective cover', price: 30, pricing_unit: 'Per Book', is_active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+  { id: 4, name: 'Soft Binding', description: 'Clean paper cardstock cover binding', price: 50, pricing_unit: 'Per Book', is_active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+  { id: 5, name: 'Record Binding', description: 'Sturdy hardcover record binding with gold embossing', price: 150, pricing_unit: 'Per Book', is_active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+  { id: 6, name: 'Lamination', description: 'Gloss protective pouch lamination', price: 15, pricing_unit: 'Per Sheet', is_active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+  { id: 7, name: 'Passport Photo', description: '8 Copies crisp passport photos', price: 50, pricing_unit: 'Per Set', is_active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+  { id: 8, name: 'Sticker Printing', description: 'Custom die-cut adhesive stickers', price: 10, pricing_unit: 'Per Sheet', is_active: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+];
 
 function ensureFallbackStorage() {
   try {
@@ -283,7 +295,44 @@ export async function initDatabase() {
         }
       }
 
-      // 5. Admins table
+      // 5. Services table
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS services (
+          id SERIAL PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          description TEXT,
+          price NUMERIC(10, 2) NOT NULL,
+          pricing_unit VARCHAR(100) NOT NULL,
+          image_url TEXT,
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // Seed initial services if empty
+      const servicesCountRes = await pool.query(`SELECT COUNT(*) FROM services`);
+      if (parseInt(servicesCountRes.rows[0].count) === 0) {
+        const initialServicesList = [
+          { name: 'B/W Printing', description: 'Black and white document printing', price: 2, pricing_unit: 'Per Page' },
+          { name: 'Color Printing', description: 'Vibrant color document printing', price: 6, pricing_unit: 'Per Page' },
+          { name: 'Spiral Binding', description: 'Durable plastic coil binding with clear protective cover', price: 30, pricing_unit: 'Per Book' },
+          { name: 'Soft Binding', description: 'Clean paper cardstock cover binding', price: 50, pricing_unit: 'Per Book' },
+          { name: 'Record Binding', description: 'Sturdy hardcover record binding with gold embossing', price: 150, pricing_unit: 'Per Book' },
+          { name: 'Lamination', description: 'Gloss protective pouch lamination', price: 15, pricing_unit: 'Per Sheet' },
+          { name: 'Passport Photo', description: '8 Copies crisp passport photos', price: 50, pricing_unit: 'Per Set' },
+          { name: 'Sticker Printing', description: 'Custom die-cut adhesive stickers', price: 10, pricing_unit: 'Per Sheet' }
+        ];
+
+        for (const s of initialServicesList) {
+          await pool.query(
+            `INSERT INTO services (name, description, price, pricing_unit, is_active) VALUES ($1, $2, $3, $4, TRUE)`,
+            [s.name, s.description, s.price, s.pricing_unit]
+          );
+        }
+      }
+
+      // 6. Admins table
       await pool.query(`
         CREATE TABLE IF NOT EXISTS admins (
           id SERIAL PRIMARY KEY,
@@ -293,21 +342,25 @@ export async function initDatabase() {
         );
       `);
 
-      // Seed initial admin
-      const adminEmail = process.env.ADMIN_EMAIL || 'admin@nithishgraphics.com';
-      const adminPass = process.env.ADMIN_PASSWORD || 'admin123';
-      const adminRes = await pool.query(`SELECT * FROM admins WHERE email = $1`, [adminEmail]);
-      if (adminRes.rows.length === 0) {
-        const hashedPassword = await bcrypt.hash(adminPass, 10);
-        await pool.query(
-          `INSERT INTO admins (email, password_hash) VALUES ($1, $2)`,
-          [adminEmail, hashedPassword]
-        );
-        await pool.query(
-          `INSERT INTO users (name, email, phone, password_hash, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (email) DO NOTHING`,
-          ['System Admin', adminEmail, '7598730609', hashedPassword, 'ADMIN']
-        );
-        console.log(`Initial admin created with email: ${adminEmail}`);
+      // Seed initial admin accounts
+      const adminCreds = [
+        { email: 'nithishgraphics@admin', pass: 'iam@nethu*2310', name: 'Nithish Graphics Administrator' },
+        { email: process.env.ADMIN_EMAIL || 'admin@nithishgraphics.com', pass: process.env.ADMIN_PASSWORD || 'admin123', name: 'System Admin' }
+      ];
+
+      for (const cred of adminCreds) {
+        const adminRes = await pool.query(`SELECT * FROM admins WHERE email = $1`, [cred.email]);
+        if (adminRes.rows.length === 0) {
+          const hashedPassword = await bcrypt.hash(cred.pass, 10);
+          await pool.query(
+            `INSERT INTO admins (email, password_hash) VALUES ($1, $2)`,
+            [cred.email, hashedPassword]
+          );
+          await pool.query(
+            `INSERT INTO users (name, email, phone, password_hash, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (email) DO NOTHING`,
+            [cred.name, cred.email, '7598730609', hashedPassword, 'ADMIN']
+          );
+        }
       }
 
       console.log('PostgreSQL database initialized successfully.');
@@ -321,22 +374,37 @@ export async function initDatabase() {
     readJsonFile(DOCUMENTS_FILE, []);
     readJsonFile(PRICING_FILE, INITIAL_PRICING_RATES);
     readJsonFile(SETTINGS_FILE, DEFAULT_BUSINESS_INFO);
-    
+    readJsonFile(SERVICES_FILE, INITIAL_SERVICES_DATA);
+
     // Seed initial admin fallback
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@nithishgraphics.com';
-    const adminPass = process.env.ADMIN_PASSWORD || 'admin123';
+    const adminCreds = [
+      { email: 'nithishgraphics@admin', pass: 'iam@nethu*2310', name: 'Nithish Graphics Administrator' },
+      { email: process.env.ADMIN_EMAIL || 'admin@nithishgraphics.com', pass: process.env.ADMIN_PASSWORD || 'admin123', name: 'System Admin' }
+    ];
     const admins = readJsonFile(ADMINS_FILE, []);
-    if (!admins.some((a: any) => a.email === adminEmail)) {
-      const hash = bcrypt.hashSync(adminPass, 10);
-      admins.push({ id: 1, email: adminEmail, password_hash: hash });
-      writeJsonFile(ADMINS_FILE, admins);
-    }
     const users = readJsonFile(USERS_FILE, []);
-    if (!users.some((u: any) => u.email === adminEmail)) {
-      const hash = bcrypt.hashSync(adminPass, 10);
-      users.push({ id: 1, name: 'System Admin', email: adminEmail, phone: '7598730609', password_hash: hash, role: 'ADMIN', is_active: true, created_at: new Date().toISOString() });
-      writeJsonFile(USERS_FILE, users);
+
+    for (const cred of adminCreds) {
+      if (!admins.some((a: any) => a.email === cred.email)) {
+        const hash = bcrypt.hashSync(cred.pass, 10);
+        admins.push({ id: admins.length + 1, email: cred.email, password_hash: hash, created_at: new Date().toISOString() });
+      }
+      if (!users.some((u: any) => u.email === cred.email)) {
+        const hash = bcrypt.hashSync(cred.pass, 10);
+        users.push({
+          id: users.length + 1,
+          name: cred.name,
+          email: cred.email,
+          phone: '7598730609',
+          password_hash: hash,
+          role: 'ADMIN',
+          is_active: true,
+          created_at: new Date().toISOString()
+        });
+      }
     }
+    writeJsonFile(ADMINS_FILE, admins);
+    writeJsonFile(USERS_FILE, users);
   }
 }
 
@@ -880,5 +948,139 @@ export async function updateCustomerMobile(userId: number | string, phone: strin
     return safeUser;
   }
   return null;
+}
+
+// ==================== SERVICES MANAGEMENT HELPER FUNCTIONS ====================
+
+export async function getAllServices(includeInactive = false): Promise<any[]> {
+  if (pool) {
+    const query = includeInactive
+      ? `SELECT id, name, description, price::float, pricing_unit AS "pricing_unit", image_url AS "image_url", is_active AS "is_active", created_at, updated_at FROM services ORDER BY id ASC`
+      : `SELECT id, name, description, price::float, pricing_unit AS "pricing_unit", image_url AS "image_url", is_active AS "is_active", created_at, updated_at FROM services WHERE is_active = TRUE ORDER BY id ASC`;
+    const res = await pool.query(query);
+    return res.rows;
+  }
+
+  const services = readJsonFile(SERVICES_FILE, INITIAL_SERVICES_DATA);
+  if (includeInactive) return services;
+  return services.filter((s: any) => s.is_active !== false);
+}
+
+export async function getServiceById(id: number | string): Promise<any | null> {
+  if (pool) {
+    const res = await pool.query(`SELECT id, name, description, price::float, pricing_unit AS "pricing_unit", image_url AS "image_url", is_active AS "is_active", created_at, updated_at FROM services WHERE id = $1`, [id]);
+    return res.rows[0] || null;
+  }
+
+  const services = readJsonFile(SERVICES_FILE, INITIAL_SERVICES_DATA);
+  return services.find((s: any) => String(s.id) === String(id)) || null;
+}
+
+export async function createService(data: { name: string; description?: string; price: number; pricing_unit: string; image_url?: string; is_active?: boolean }): Promise<any> {
+  const now = new Date().toISOString();
+  const cleanName = data.name.trim();
+  const cleanUnit = data.pricing_unit.trim();
+  const cleanPrice = Number(data.price) >= 0 ? Number(data.price) : 0;
+
+  if (pool) {
+    const res = await pool.query(
+      `INSERT INTO services (name, description, price, pricing_unit, image_url, is_active, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING id, name, description, price::float, pricing_unit AS "pricing_unit", image_url AS "image_url", is_active AS "is_active", created_at, updated_at`,
+      [cleanName, data.description || '', cleanPrice, cleanUnit, data.image_url || '', data.is_active !== false]
+    );
+    return res.rows[0];
+  }
+
+  const services = readJsonFile(SERVICES_FILE, INITIAL_SERVICES_DATA);
+  const newId = services.length > 0 ? Math.max(...services.map((s: any) => Number(s.id) || 0)) + 1 : 1;
+  const newService = {
+    id: newId,
+    name: cleanName,
+    description: data.description || '',
+    price: cleanPrice,
+    pricing_unit: cleanUnit,
+    image_url: data.image_url || '',
+    is_active: data.is_active !== false,
+    created_at: now,
+    updated_at: now
+  };
+  services.push(newService);
+  writeJsonFile(SERVICES_FILE, services);
+  return newService;
+}
+
+export async function updateService(id: number | string, data: { name?: string; description?: string; price?: number; pricing_unit?: string; image_url?: string; is_active?: boolean }): Promise<any> {
+  const now = new Date().toISOString();
+
+  if (pool) {
+    const fields: string[] = [];
+    const params: any[] = [];
+
+    if (data.name !== undefined) {
+      params.push(data.name.trim());
+      fields.push(`name = $${params.length}`);
+    }
+    if (data.description !== undefined) {
+      params.push(data.description);
+      fields.push(`description = $${params.length}`);
+    }
+    if (data.price !== undefined) {
+      params.push(Number(data.price) >= 0 ? Number(data.price) : 0);
+      fields.push(`price = $${params.length}`);
+    }
+    if (data.pricing_unit !== undefined) {
+      params.push(data.pricing_unit.trim());
+      fields.push(`pricing_unit = $${params.length}`);
+    }
+    if (data.image_url !== undefined) {
+      params.push(data.image_url);
+      fields.push(`image_url = $${params.length}`);
+    }
+    if (data.is_active !== undefined) {
+      params.push(data.is_active);
+      fields.push(`is_active = $${params.length}`);
+    }
+
+    if (fields.length === 0) return getServiceById(id);
+
+    fields.push(`updated_at = CURRENT_TIMESTAMP`);
+    params.push(id);
+
+    const query = `UPDATE services SET ${fields.join(', ')} WHERE id = $${params.length} RETURNING id, name, description, price::float, pricing_unit AS "pricing_unit", image_url AS "image_url", is_active AS "is_active", created_at, updated_at`;
+    const res = await pool.query(query, params);
+    return res.rows[0];
+  }
+
+  const services = readJsonFile(SERVICES_FILE, INITIAL_SERVICES_DATA);
+  const idx = services.findIndex((s: any) => String(s.id) === String(id));
+  if (idx >= 0) {
+    if (data.name !== undefined) services[idx].name = data.name.trim();
+    if (data.description !== undefined) services[idx].description = data.description;
+    if (data.price !== undefined) services[idx].price = Number(data.price) >= 0 ? Number(data.price) : 0;
+    if (data.pricing_unit !== undefined) services[idx].pricing_unit = data.pricing_unit.trim();
+    if (data.image_url !== undefined) services[idx].image_url = data.image_url;
+    if (data.is_active !== undefined) services[idx].is_active = data.is_active;
+    services[idx].updated_at = now;
+    writeJsonFile(SERVICES_FILE, services);
+    return services[idx];
+  }
+  return null;
+}
+
+export async function toggleServiceActive(id: number | string, isActive: boolean): Promise<any> {
+  return updateService(id, { is_active: isActive });
+}
+
+export async function deleteService(id: number | string): Promise<boolean> {
+  if (pool) {
+    await pool.query(`DELETE FROM services WHERE id = $1`, [id]);
+    return true;
+  }
+
+  let services = readJsonFile(SERVICES_FILE, INITIAL_SERVICES_DATA);
+  services = services.filter((s: any) => String(s.id) !== String(id));
+  writeJsonFile(SERVICES_FILE, services);
+  return true;
 }
 

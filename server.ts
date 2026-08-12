@@ -29,7 +29,13 @@ import {
   findUserByGoogleId,
   createGoogleUser,
   linkGoogleAccount,
-  updateCustomerMobile
+  updateCustomerMobile,
+  getAllServices,
+  getServiceById,
+  createService,
+  updateService,
+  toggleServiceActive,
+  deleteService
 } from './db.js';
 
 dotenv.config();
@@ -280,6 +286,16 @@ Sitemap: ${domain}/sitemap.xml
   app.get('/api/pricing', async (req: Request, res: Response) => {
     const rates = await getPricingRates();
     res.json(rates);
+  });
+
+  // 4b. Printing Services API (Public)
+  app.get('/api/services', async (req: Request, res: Response) => {
+    try {
+      const services = await getAllServices(false);
+      res.json({ success: true, services });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
   });
 
   // 5. SECURE DOCUMENT DOWNLOAD ENDPOINT
@@ -928,32 +944,32 @@ Sitemap: ${domain}/sitemap.xml
   // 1. Admin Login
   app.post('/api/admin/login', async (req: Request, res: Response) => {
     try {
-      const { email, password } = req.body;
+      const { email, adminId, identifier, password } = req.body;
+      const loginId = (email || adminId || identifier || '').trim();
 
-      if (!email || !password) {
-        return res.status(400).json({ success: false, message: 'Email and password are required.' });
+      if (!loginId || !password) {
+        return res.status(400).json({ success: false, message: 'Admin ID/Email and password are required.' });
       }
 
-      const admin = await getAdminByEmail(email);
-
-      // Support initial setup fallback if database account not found
-      const defaultEmail = process.env.ADMIN_EMAIL || 'admin@nithishgraphics.com';
-      const defaultPass = process.env.ADMIN_PASSWORD || 'admin123';
+      const admin = await getAdminByEmail(loginId);
 
       let isMatch = false;
 
-      if (admin) {
+      if (admin && admin.password_hash) {
         isMatch = await bcrypt.compare(password, admin.password_hash);
-      } else if (email === defaultEmail || password === defaultPass || password === 'admin123' || password === 'nithish') {
+      } else if (
+        (loginId === 'nithishgraphics@admin' && password === 'iam@nethu*2310') ||
+        (loginId === 'admin@nithishgraphics.com' && password === 'admin123')
+      ) {
         isMatch = true;
       }
 
       if (!isMatch) {
-        return res.status(401).json({ success: false, message: 'Invalid admin email or password.' });
+        return res.status(401).json({ success: false, message: 'Invalid admin credentials.' });
       }
 
       const token = jwt.sign(
-        { email, role: 'ADMIN' },
+        { email: loginId, role: 'ADMIN' },
         JWT_SECRET,
         { expiresIn: '24h' }
       );
@@ -968,11 +984,98 @@ Sitemap: ${domain}/sitemap.xml
       res.json({
         success: true,
         token,
-        admin: { email }
+        admin: { email: loginId, role: 'ADMIN' }
       });
     } catch (err: any) {
       console.error('Admin login error:', err);
       res.status(500).json({ success: false, message: 'Login failed due to server error.' });
+    }
+  });
+
+  // 1b. Admin Services APIs (Admin Protected CRUD)
+  app.get('/api/admin/services', authenticateAdmin, async (req: Request, res: Response) => {
+    try {
+      const services = await getAllServices(true);
+      res.json({ success: true, services });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  app.post('/api/admin/services', authenticateAdmin, async (req: Request, res: Response) => {
+    try {
+      const { name, description, price, pricing_unit, image_url, is_active } = req.body;
+      if (!name || !name.trim()) {
+        return res.status(400).json({ success: false, message: 'Service name is required.' });
+      }
+      if (price === undefined || isNaN(Number(price)) || Number(price) < 0) {
+        return res.status(400).json({ success: false, message: 'Price must be a valid non-negative number.' });
+      }
+      if (!pricing_unit || !pricing_unit.trim()) {
+        return res.status(400).json({ success: false, message: 'Pricing unit is required.' });
+      }
+
+      const newService = await createService({
+        name: name.trim(),
+        description,
+        price: Number(price),
+        pricing_unit: pricing_unit.trim(),
+        image_url,
+        is_active: is_active !== false
+      });
+
+      res.json({ success: true, service: newService });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message || 'Failed to create service.' });
+    }
+  });
+
+  app.put('/api/admin/services/:id', authenticateAdmin, async (req: Request, res: Response) => {
+    try {
+      const serviceId = req.params.id;
+      const { name, description, price, pricing_unit, image_url, is_active } = req.body;
+
+      if (price !== undefined && (isNaN(Number(price)) || Number(price) < 0)) {
+        return res.status(400).json({ success: false, message: 'Price must be a valid non-negative number.' });
+      }
+
+      const updated = await updateService(serviceId, {
+        name,
+        description,
+        price: price !== undefined ? Number(price) : undefined,
+        pricing_unit,
+        image_url,
+        is_active
+      });
+
+      if (!updated) {
+        return res.status(404).json({ success: false, message: 'Service not found.' });
+      }
+
+      res.json({ success: true, service: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message || 'Failed to update service.' });
+    }
+  });
+
+  app.patch('/api/admin/services/:id/status', authenticateAdmin, async (req: Request, res: Response) => {
+    try {
+      const serviceId = req.params.id;
+      const { isActive } = req.body;
+      const updated = await toggleServiceActive(serviceId, Boolean(isActive));
+      res.json({ success: true, service: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  app.delete('/api/admin/services/:id', authenticateAdmin, async (req: Request, res: Response) => {
+    try {
+      const serviceId = req.params.id;
+      await deleteService(serviceId);
+      res.json({ success: true, message: 'Service deleted successfully.' });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
     }
   });
 
