@@ -24,6 +24,7 @@ const DOCUMENTS_FILE = path.join(FALLBACK_DIR, 'documents.json');
 const PRICING_FILE = path.join(FALLBACK_DIR, 'pricing.json');
 const SETTINGS_FILE = path.join(FALLBACK_DIR, 'settings.json');
 const ADMINS_FILE = path.join(FALLBACK_DIR, 'admins.json');
+const USERS_FILE = path.join(FALLBACK_DIR, 'users.json');
 
 function ensureFallbackStorage() {
   if (!fs.existsSync(FALLBACK_DIR)) {
@@ -154,10 +155,26 @@ export async function initDatabase() {
   if (pool) {
     try {
       console.log('Connecting to PostgreSQL database...');
+      // 0. Users table (Customers & Admins)
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          phone VARCHAR(50) NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          role VARCHAR(50) DEFAULT 'CUSTOMER',
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
       // 1. Orders table
       await pool.query(`
         CREATE TABLE IF NOT EXISTS orders (
           order_id VARCHAR(50) PRIMARY KEY,
+          customer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
           customer_name VARCHAR(255) NOT NULL,
           customer_phone VARCHAR(50) NOT NULL,
           service VARCHAR(255) NOT NULL,
@@ -176,6 +193,8 @@ export async function initDatabase() {
           updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
       `);
+
+      await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`);
 
       // 2. Order documents table
       await pool.query(`
@@ -259,6 +278,10 @@ export async function initDatabase() {
           `INSERT INTO admins (email, password_hash) VALUES ($1, $2)`,
           [adminEmail, hashedPassword]
         );
+        await pool.query(
+          `INSERT INTO users (name, email, phone, password_hash, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (email) DO NOTHING`,
+          ['System Admin', adminEmail, '7598730609', hashedPassword, 'ADMIN']
+        );
         console.log(`Initial admin created with email: ${adminEmail}`);
       }
 
@@ -268,6 +291,7 @@ export async function initDatabase() {
     }
   } else {
     console.log('Using local JSON storage fallback for development.');
+    readJsonFile(USERS_FILE, []);
     readJsonFile(ORDERS_FILE, []);
     readJsonFile(DOCUMENTS_FILE, []);
     readJsonFile(PRICING_FILE, INITIAL_PRICING_RATES);
@@ -281,6 +305,12 @@ export async function initDatabase() {
       const hash = bcrypt.hashSync(adminPass, 10);
       admins.push({ id: 1, email: adminEmail, password_hash: hash });
       writeJsonFile(ADMINS_FILE, admins);
+    }
+    const users = readJsonFile(USERS_FILE, []);
+    if (!users.some((u: any) => u.email === adminEmail)) {
+      const hash = bcrypt.hashSync(adminPass, 10);
+      users.push({ id: 1, name: 'System Admin', email: adminEmail, phone: '7598730609', password_hash: hash, role: 'ADMIN', is_active: true, created_at: new Date().toISOString() });
+      writeJsonFile(USERS_FILE, users);
     }
   }
 }
@@ -368,13 +398,13 @@ export async function createOrder(orderData: any, documents: any[]): Promise<any
       await client.query('BEGIN');
       const orderRes = await client.query(
         `INSERT INTO orders (
-          order_id, customer_name, customer_phone, service, quantity, pages_per_copy,
+          order_id, customer_id, customer_name, customer_phone, service, quantity, pages_per_copy,
           color_type, paper_size, paper_gsm, print_side, binding_type,
           additional_instructions, total_price, payment_status, order_status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         RETURNING *`,
         [
-          orderData.orderId, orderData.customerName, orderData.customerPhone, orderData.service,
+          orderData.orderId, orderData.customerId || null, orderData.customerName, orderData.customerPhone, orderData.service,
           orderData.quantity || 1, orderData.pagesPerCopy || 1, orderData.colorType,
           orderData.paperSize || 'A4', orderData.paperGsm || '70gsm', orderData.printSide,
           orderData.bindingType, orderData.additionalInstructions || '', orderData.totalPrice,
@@ -412,6 +442,7 @@ export async function createOrder(orderData: any, documents: any[]): Promise<any
 
   const newOrder = {
     order_id: orderData.orderId,
+    customer_id: orderData.customerId || null,
     customer_name: orderData.customerName,
     customer_phone: orderData.customerPhone,
     service: orderData.service,
@@ -524,3 +555,183 @@ export async function getAdminByEmail(email: string): Promise<any | null> {
   const admins = readJsonFile(ADMINS_FILE, []);
   return admins.find((a: any) => a.email === email) || null;
 }
+
+// User & Customer Management Helper Functions
+
+export async function createUser(userData: {
+  name: string;
+  email: string;
+  phone: string;
+  passwordHash: string;
+  role?: string;
+}): Promise<any> {
+  const role = userData.role || 'CUSTOMER';
+
+  if (pool) {
+    const res = await pool.query(
+      `INSERT INTO users (name, email, phone, password_hash, role)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, email, phone, role, is_active, created_at`,
+      [userData.name, userData.email.toLowerCase(), userData.phone, userData.passwordHash, role]
+    );
+    return res.rows[0];
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  const newUser = {
+    id: users.length > 0 ? Math.max(...users.map((u: any) => Number(u.id) || 0)) + 1 : 1,
+    name: userData.name,
+    email: userData.email.toLowerCase(),
+    phone: userData.phone,
+    password_hash: userData.passwordHash,
+    role,
+    is_active: true,
+    created_at: new Date().toISOString()
+  };
+
+  users.push(newUser);
+  writeJsonFile(USERS_FILE, users);
+
+  const { password_hash, ...safeUser } = newUser;
+  return safeUser;
+}
+
+export async function findUserByIdentifier(identifier: string): Promise<any | null> {
+  const term = identifier.trim().toLowerCase();
+
+  if (pool) {
+    const res = await pool.query(
+      `SELECT * FROM users WHERE LOWER(email) = $1 OR phone = $2 LIMIT 1`,
+      [term, identifier.trim()]
+    );
+    return res.rows[0] || null;
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  return users.find((u: any) => u.email.toLowerCase() === term || u.phone === identifier.trim()) || null;
+}
+
+export async function findUserById(id: number | string): Promise<any | null> {
+  if (pool) {
+    const res = await pool.query(`SELECT id, name, email, phone, role, is_active, created_at FROM users WHERE id = $1`, [id]);
+    return res.rows[0] || null;
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  const user = users.find((u: any) => String(u.id) === String(id));
+  if (!user) return null;
+  const { password_hash, ...safeUser } = user;
+  return safeUser;
+}
+
+export async function updateUserProfile(id: number | string, data: { name?: string; email?: string; phone?: string; passwordHash?: string }): Promise<any> {
+  if (pool) {
+    let query = `UPDATE users SET updated_at = CURRENT_TIMESTAMP`;
+    const params: any[] = [];
+
+    if (data.name) {
+      params.push(data.name);
+      query += `, name = $${params.length}`;
+    }
+    if (data.email) {
+      params.push(data.email.toLowerCase());
+      query += `, email = $${params.length}`;
+    }
+    if (data.phone) {
+      params.push(data.phone);
+      query += `, phone = $${params.length}`;
+    }
+    if (data.passwordHash) {
+      params.push(data.passwordHash);
+      query += `, password_hash = $${params.length}`;
+    }
+
+    params.push(id);
+    query += ` WHERE id = $${params.length} AND role = 'CUSTOMER' RETURNING id, name, email, phone, role, is_active, created_at`;
+
+    const res = await pool.query(query, params);
+    return res.rows[0];
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  const idx = users.findIndex((u: any) => String(u.id) === String(id));
+  if (idx >= 0) {
+    if (data.name) users[idx].name = data.name;
+    if (data.email) users[idx].email = data.email.toLowerCase();
+    if (data.phone) users[idx].phone = data.phone;
+    if (data.passwordHash) users[idx].password_hash = data.passwordHash;
+    users[idx].role = 'CUSTOMER'; // Enforce role stays CUSTOMER
+    writeJsonFile(USERS_FILE, users);
+    const { password_hash, ...safeUser } = users[idx];
+    return safeUser;
+  }
+  return null;
+}
+
+export async function getAllCustomers(): Promise<any[]> {
+  const allOrders = await getAllOrders();
+
+  if (pool) {
+    const res = await pool.query(
+      `SELECT id, name, email, phone, role, is_active, created_at FROM users WHERE role = 'CUSTOMER' ORDER BY created_at DESC`
+    );
+
+    return res.rows.map(user => {
+      const userOrders = allOrders.filter(o => String(o.customer_id) === String(user.id) || o.customer_phone === user.phone || o.customer_name === user.name);
+      const totalSpend = userOrders.reduce((sum, o) => sum + Number(o.total_price || 0), 0);
+
+      return {
+        ...user,
+        orderCount: userOrders.length,
+        totalSpend,
+        recentOrders: userOrders.slice(0, 5)
+      };
+    });
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  const customers = users.filter((u: any) => u.role === 'CUSTOMER' || !u.role);
+
+  return customers.map((user: any) => {
+    const userOrders = allOrders.filter((o: any) => String(o.customer_id) === String(user.id) || o.customer_phone === user.phone || o.customer_name === user.name);
+    const totalSpend = userOrders.reduce((sum: number, o: any) => sum + Number(o.total_price || 0), 0);
+    const { password_hash, ...safeUser } = user;
+
+    return {
+      ...safeUser,
+      orderCount: userOrders.length,
+      totalSpend,
+      recentOrders: userOrders.slice(0, 5)
+    };
+  });
+}
+
+export async function toggleCustomerActive(id: number | string, isActive: boolean): Promise<any> {
+  if (pool) {
+    const res = await pool.query(
+      `UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, name, email, phone, role, is_active`,
+      [isActive, id]
+    );
+    return res.rows[0];
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  const user = users.find((u: any) => String(u.id) === String(id));
+  if (user) {
+    user.is_active = isActive;
+    writeJsonFile(USERS_FILE, users);
+    const { password_hash, ...safeUser } = user;
+    return safeUser;
+  }
+  return null;
+}
+
+export async function getOrdersForCustomer(user: { id?: number | string; phone?: string; email?: string }): Promise<any[]> {
+  const allOrders = await getAllOrders();
+  return allOrders.filter((o: any) => {
+    if (user.id && String(o.customer_id) === String(user.id)) return true;
+    if (user.phone && o.customer_phone === user.phone) return true;
+    return false;
+  });
+}
+

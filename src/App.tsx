@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initialBusinessInfo, defaultServices, defaultPricingRates } from './data/initialBusinessInfo';
 import { getSeoMetadata } from './data/seoData';
-import { BusinessInfo, ServiceItem, PricingRate } from './types';
+import { BusinessInfo, ServiceItem, PricingRate, CustomerUser } from './types';
 import { HeadSEO } from './components/HeadSEO';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
@@ -14,13 +14,18 @@ import { PricingPage } from './pages/PricingPage';
 import { ContactPage } from './pages/ContactPage';
 import { AboutPage } from './pages/AboutPage';
 import { OrderPage } from './pages/OrderPage';
-import { CustomerOrdersPage } from './pages/CustomerOrdersPage';
+
+// Customer Auth & Dashboard Pages
+import { RegisterPage } from './pages/auth/RegisterPage';
+import { LoginPage } from './pages/auth/LoginPage';
+import { CustomerDashboardPage } from './pages/customer/CustomerDashboardPage';
 
 // Admin Portal Pages
 import { AdminLoginPage } from './pages/admin/AdminLoginPage';
 import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
 import { AdminPricingPage } from './pages/admin/AdminPricingPage';
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage';
+import { AdminCustomersPage } from './pages/admin/AdminCustomersPage';
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname || '/');
@@ -28,6 +33,16 @@ export default function App() {
   const [services] = useState<ServiceItem[]>(defaultServices);
   const [pricingRates, setPricingRates] = useState<PricingRate[]>(defaultPricingRates);
   const [isSeoModalOpen, setIsSeoModalOpen] = useState<boolean>(false);
+
+  // Customer Auth State
+  const [customerToken, setCustomerToken] = useState<string | null>(() => localStorage.getItem('customer_token'));
+  const [customerUser, setCustomerUser] = useState<CustomerUser | null>(() => {
+    const raw = localStorage.getItem('customer_user');
+    if (raw) {
+      try { return JSON.parse(raw); } catch (e) {}
+    }
+    return null;
+  });
 
   // Admin JWT Token authentication state
   const [adminToken, setAdminToken] = useState<string | null>(() => localStorage.getItem('admin_token'));
@@ -62,6 +77,23 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Fetch updated customer profile on mount if token exists
+  useEffect(() => {
+    if (customerToken) {
+      fetch('/api/customer/profile', {
+        headers: { Authorization: `Bearer ${customerToken}` }
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.user) {
+            setCustomerUser(data.user);
+            localStorage.setItem('customer_user', JSON.stringify(data.user));
+          }
+        })
+        .catch(() => {});
+    }
+  }, [customerToken]);
+
   const navigate = (path: string) => {
     window.history.pushState({}, '', path);
     setCurrentPath(path);
@@ -72,11 +104,30 @@ export default function App() {
     setStoreInfo((prev) => ({ ...prev, ...updated }));
   };
 
+  const handleCustomerLoginSuccess = (user: CustomerUser, token: string) => {
+    setCustomerToken(token);
+    setCustomerUser(user);
+    localStorage.setItem('customer_token', token);
+    localStorage.setItem('customer_user', JSON.stringify(user));
+  };
+
+  const handleCustomerLogout = () => {
+    localStorage.removeItem('customer_token');
+    localStorage.removeItem('customer_user');
+    setCustomerToken(null);
+    setCustomerUser(null);
+    navigate('/');
+  };
+
   const handleAdminLogout = () => {
     localStorage.removeItem('admin_token');
     setAdminToken(null);
     navigate('/admin/login');
   };
+
+  // Extract redirect query parameter if present in current search
+  const searchParams = new URLSearchParams(window.location.search);
+  const redirectParam = searchParams.get('redirect') || undefined;
 
   // Get current SEO Metadata
   const seoMeta = getSeoMetadata(currentPath, storeInfo);
@@ -109,11 +160,89 @@ export default function App() {
     if (currentPath === '/about') {
       return <AboutPage info={storeInfo} navigate={navigate} />;
     }
-    if (currentPath === '/order') {
-      return <OrderPage info={storeInfo} navigate={navigate} />;
+
+    // Customer Authentication Pages
+    if (currentPath.startsWith('/register')) {
+      return (
+        <RegisterPage
+          info={storeInfo}
+          onLoginSuccess={handleCustomerLoginSuccess}
+          navigate={navigate}
+          redirectPath={redirectParam}
+        />
+      );
     }
 
-    // Admin Portal Routing
+    if (currentPath.startsWith('/login')) {
+      return (
+        <LoginPage
+          info={storeInfo}
+          onLoginSuccess={handleCustomerLoginSuccess}
+          navigate={navigate}
+          redirectPath={redirectParam}
+          noticeMessage={redirectParam ? "Please login or create an account to place an order." : undefined}
+        />
+      );
+    }
+
+    // Customer Order Creation Page (Restricted to logged-in customers)
+    if (currentPath === '/order') {
+      if (!customerToken) {
+        return (
+          <LoginPage
+            info={storeInfo}
+            onLoginSuccess={handleCustomerLoginSuccess}
+            navigate={navigate}
+            redirectPath="/order"
+            noticeMessage="Please login or create an account to place an order."
+          />
+        );
+      }
+      return (
+        <OrderPage
+          info={storeInfo}
+          customerUser={customerUser}
+          customerToken={customerToken}
+          navigate={navigate}
+        />
+      );
+    }
+
+    // Customer Dashboard Pages
+    if (currentPath.startsWith('/customer')) {
+      if (!customerToken || !customerUser) {
+        return (
+          <LoginPage
+            info={storeInfo}
+            onLoginSuccess={handleCustomerLoginSuccess}
+            navigate={navigate}
+            redirectPath={currentPath}
+            noticeMessage="Please login or create an account to access your customer dashboard."
+          />
+        );
+      }
+
+      let activeTab: 'dashboard' | 'orders' | 'profile' = 'dashboard';
+      if (currentPath.includes('/orders')) activeTab = 'orders';
+      if (currentPath.includes('/profile')) activeTab = 'profile';
+
+      return (
+        <CustomerDashboardPage
+          info={storeInfo}
+          user={customerUser}
+          token={customerToken}
+          onLogout={handleCustomerLogout}
+          onUserUpdated={(updated) => {
+            setCustomerUser(updated);
+            localStorage.setItem('customer_user', JSON.stringify(updated));
+          }}
+          navigate={navigate}
+          activeTab={activeTab}
+        />
+      );
+    }
+
+    // Admin Portal Routing (Completely separate from customer login)
     if (currentPath === '/admin/login') {
       return (
         <AdminLoginPage
@@ -136,6 +265,26 @@ export default function App() {
       }
       return (
         <AdminDashboardPage
+          info={storeInfo}
+          token={adminToken}
+          onLogout={handleAdminLogout}
+          navigate={navigate}
+        />
+      );
+    }
+
+    if (currentPath === '/admin/customers') {
+      if (!adminToken) {
+        return (
+          <AdminLoginPage
+            info={storeInfo}
+            onLoginSuccess={(token) => setAdminToken(token)}
+            navigate={navigate}
+          />
+        );
+      }
+      return (
+        <AdminCustomersPage
           info={storeInfo}
           token={adminToken}
           onLogout={handleAdminLogout}
@@ -185,10 +334,6 @@ export default function App() {
       );
     }
 
-    if (currentPath.startsWith('/customer')) {
-      return <CustomerOrdersPage info={storeInfo} navigate={navigate} />;
-    }
-
     // Default Fallback to Homepage
     return <HomePage info={storeInfo} services={services} navigate={navigate} />;
   };
@@ -196,7 +341,7 @@ export default function App() {
   const isAdminRoute = currentPath.startsWith('/admin');
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col justify-between selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col justify-between selection:bg-orange-500 selection:text-white">
       {/* Dynamic SEO Meta Tags & JSON-LD Schema Injection */}
       <HeadSEO meta={seoMeta} info={storeInfo} />
 
@@ -207,6 +352,8 @@ export default function App() {
             currentPath={currentPath}
             navigate={navigate}
             info={storeInfo}
+            customerUser={customerUser}
+            onCustomerLogout={handleCustomerLogout}
             onOpenSeoInspector={() => setIsSeoModalOpen(true)}
           />
         )}

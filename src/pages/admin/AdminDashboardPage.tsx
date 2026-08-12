@@ -85,74 +85,90 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({ info, to
 
   // Calculate statistics summary
   const totalOrdersCount = orders.length;
-  const pendingCount = orders.filter(o => (o.order_status || o.status || '').toLowerCase() === 'pending').length;
-  const printingCount = orders.filter(o => ['confirmed', 'printing'].includes((o.order_status || o.status || '').toLowerCase())).length;
-  const completedCount = orders.filter(o => ['ready', 'completed', 'delivered'].includes((o.order_status || o.status || '').toLowerCase())).length;
+  const newOrdersCount = orders.filter(o => (o.order_status || o.status || '').toLowerCase() === 'pending').length;
+  const pendingCount = orders.filter(o => ['pending', 'confirmed'].includes((o.order_status || o.status || '').toLowerCase())).length;
+  const printingCount = orders.filter(o => (o.order_status || o.status || '').toLowerCase() === 'printing').length;
+  const readyCount = orders.filter(o => (o.order_status || o.status || '').toLowerCase() === 'ready').length;
+  const completedCount = orders.filter(o => (o.order_status || o.status || '').toLowerCase() === 'completed').length;
   const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total_price || o.totalAmount || 0), 0);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8 selection:bg-orange-500 selection:text-white">
       {/* Admin Navigation Bar */}
       <div className="bg-slate-900 text-white p-6 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xl">
         <div>
           <div className="flex items-center space-x-2">
-            <Shield className="w-6 h-6 text-emerald-400" />
-            <h1 className="text-2xl font-bold">Nithish Graphics Store Admin</h1>
+            <Shield className="w-6 h-6 text-orange-500" />
+            <h1 className="text-2xl font-bold">Nithish Graphics Print Business Admin</h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Incoming Orders & Document Management Dashboard
+            Print-Order Workflow & Document Management System
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => navigate('/admin/dashboard')}
-            className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-md"
+            className="px-4 py-2 bg-orange-600 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer"
           >
-            Orders
+            Dashboard & Orders
+          </button>
+          <button
+            onClick={() => navigate('/admin/customers')}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
+          >
+            Customers Management
           </button>
           <button
             onClick={() => navigate('/admin/pricing')}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition-colors"
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
           >
-            Pricing Management
+            Pricing Matrix
           </button>
           <button
             onClick={() => navigate('/admin/settings')}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition-colors"
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
           >
             Store Settings
           </button>
           <button
             onClick={onLogout}
-            className="px-4 py-2 bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white rounded-xl text-xs font-semibold transition-colors ml-2"
+            className="px-4 py-2 bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white rounded-xl text-xs font-semibold transition-colors ml-2 cursor-pointer"
           >
             Logout
           </button>
         </div>
       </div>
 
-      {/* Statistics Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-          <span className="text-xs text-slate-500 font-bold uppercase">Total Orders</span>
-          <p className="text-2xl font-extrabold text-slate-900 mt-1">{totalOrdersCount}</p>
+      {/* Statistics Overview Cards (Printo-style Print Business Management) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-xs">
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Total Orders</span>
+          <p className="text-xl font-extrabold text-slate-900 mt-1">{totalOrdersCount}</p>
         </div>
-        <div className="bg-amber-50 p-5 rounded-xl border border-amber-200 shadow-xs">
-          <span className="text-xs text-amber-800 font-bold uppercase">Pending</span>
-          <p className="text-2xl font-extrabold text-amber-900 mt-1">{pendingCount}</p>
+        <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 shadow-xs">
+          <span className="text-[10px] text-amber-800 font-bold uppercase tracking-wider block">New Orders</span>
+          <p className="text-xl font-extrabold text-amber-900 mt-1">{newOrdersCount}</p>
         </div>
-        <div className="bg-blue-50 p-5 rounded-xl border border-blue-200 shadow-xs">
-          <span className="text-xs text-blue-800 font-bold uppercase">In Printing</span>
-          <p className="text-2xl font-extrabold text-blue-900 mt-1">{printingCount}</p>
+        <div className="bg-amber-100/60 p-4 rounded-xl border border-amber-300 shadow-xs">
+          <span className="text-[10px] text-amber-900 font-bold uppercase tracking-wider block">Pending</span>
+          <p className="text-xl font-extrabold text-amber-950 mt-1">{pendingCount}</p>
         </div>
-        <div className="bg-emerald-50 p-5 rounded-xl border border-emerald-200 shadow-xs">
-          <span className="text-xs text-emerald-800 font-bold uppercase">Completed</span>
-          <p className="text-2xl font-extrabold text-emerald-900 mt-1">{completedCount}</p>
+        <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200 shadow-xs">
+          <span className="text-[10px] text-indigo-800 font-bold uppercase tracking-wider block">Printing</span>
+          <p className="text-xl font-extrabold text-indigo-900 mt-1">{printingCount}</p>
         </div>
-        <div className="bg-slate-900 text-white p-5 rounded-xl col-span-2 md:col-span-1 shadow-xs">
-          <span className="text-xs text-slate-400 font-bold uppercase">Total Revenue</span>
-          <p className="text-2xl font-extrabold text-emerald-400 mt-1">₹{totalRevenue.toFixed(0)}</p>
+        <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 shadow-xs">
+          <span className="text-[10px] text-blue-800 font-bold uppercase tracking-wider block">Ready</span>
+          <p className="text-xl font-extrabold text-blue-900 mt-1">{readyCount}</p>
+        </div>
+        <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 shadow-xs">
+          <span className="text-[10px] text-emerald-800 font-bold uppercase tracking-wider block">Completed</span>
+          <p className="text-xl font-extrabold text-emerald-900 mt-1">{completedCount}</p>
+        </div>
+        <div className="bg-slate-900 text-white p-4 rounded-xl col-span-2 sm:col-span-1 shadow-xs">
+          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Total Sales</span>
+          <p className="text-xl font-extrabold text-orange-400 mt-1">₹{totalRevenue.toFixed(0)}</p>
         </div>
       </div>
 

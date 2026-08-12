@@ -82,6 +82,22 @@ export interface OrderItem {
   documents?: OrderDocument[];
 }
 
+export interface CustomerUser {
+  id: number | string;
+  name: string;
+  email: string;
+  phone: string;
+  role: 'CUSTOMER' | 'ADMIN' | string;
+  is_active?: boolean;
+  created_at?: string;
+}
+
+export interface CustomerDetail extends CustomerUser {
+  orderCount?: number;
+  totalSpend?: number;
+  recentOrders?: OrderItem[];
+}
+
 export interface PageSeoMeta {
   title: string;
   description: string;

@@ -78,36 +78,42 @@ export const AdminSettingsPage: React.FC<AdminSettingsPageProps> = ({ info, toke
       <div className="bg-slate-900 text-white p-6 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xl">
         <div>
           <div className="flex items-center space-x-2">
-            <Shield className="w-6 h-6 text-emerald-400" />
-            <h1 className="text-2xl font-bold">Store & System Settings</h1>
+            <Shield className="w-6 h-6 text-orange-500" />
+            <h1 className="text-2xl font-bold">Store & Business Settings</h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Manage contact information, WhatsApp order templates, business hours, and SEO verification
+            Manage business parameters, WhatsApp number, contact details, business hours, and SEO verification
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => navigate('/admin/dashboard')}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold"
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
           >
-            Orders
+            Dashboard & Orders
+          </button>
+          <button
+            onClick={() => navigate('/admin/customers')}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
+          >
+            Customers Management
           </button>
           <button
             onClick={() => navigate('/admin/pricing')}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold"
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
           >
-            Pricing Management
+            Pricing Matrix
           </button>
           <button
             onClick={() => navigate('/admin/settings')}
-            className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-md"
+            className="px-4 py-2 bg-orange-600 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer"
           >
             Store Settings
           </button>
           <button
             onClick={onLogout}
-            className="px-4 py-2 bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white rounded-xl text-xs font-semibold transition-colors ml-2"
+            className="px-4 py-2 bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white rounded-xl text-xs font-semibold transition-colors ml-2 cursor-pointer"
           >
             Logout
           </button>

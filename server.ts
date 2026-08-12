@@ -18,7 +18,14 @@ import {
   getAllOrders,
   updateOrderStatus,
   getDocumentByToken,
-  getAdminByEmail
+  getAdminByEmail,
+  createUser,
+  findUserByIdentifier,
+  findUserById,
+  updateUserProfile,
+  getAllCustomers,
+  toggleCustomerActive,
+  getOrdersForCustomer
 } from './db';
 
 dotenv.config();
@@ -97,11 +104,43 @@ function authenticateAdmin(req: AuthRequest, res: Response, next: NextFunction) 
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    if (decoded.role !== 'admin' && decoded.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Admin access required.' });
+    }
     req.user = decoded;
     next();
   } catch (err) {
     return res.status(401).json({ success: false, message: 'Invalid or expired admin session token.' });
+  }
+}
+
+// Authentication Middleware for Customer routes
+function authenticateCustomer(req: AuthRequest, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  let token = '';
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (req.headers.cookie) {
+    const cookies = req.headers.cookie.split(';').reduce((acc: any, c) => {
+      const [k, v] = c.trim().split('=');
+      acc[k] = v;
+      return acc;
+    }, {});
+    token = cookies.customer_token;
+  }
+
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Please login or create an account to place an order.' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ success: false, message: 'Session expired. Please login again.' });
   }
 }
 
@@ -266,9 +305,229 @@ Sitemap: ${domain}/sitemap.xml
     }
   });
 
-  // 6. CUSTOMER MULTI-FILE ORDER CREATION API
-  app.post('/api/orders', upload.array('documents', 10), async (req: Request, res: Response) => {
+  // ==================== CUSTOMER AUTHENTICATION ENDPOINTS ====================
+
+  // 1. Customer Registration API
+  app.post('/api/auth/register', async (req: Request, res: Response) => {
     try {
+      const { name, mobileNumber, phone, email, password, confirmPassword } = req.body;
+      const userPhone = (mobileNumber || phone || '').trim();
+      const userEmail = (email || '').trim().toLowerCase();
+
+      if (!name || !name.trim()) {
+        return res.status(400).json({ success: false, message: 'Full Name is required.' });
+      }
+      if (!userPhone || !/^[0-9]{10,12}$/.test(userPhone.replace(/[^0-9]/g, ''))) {
+        return res.status(400).json({ success: false, message: 'Valid mobile number is required.' });
+      }
+      if (!userEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userEmail)) {
+        return res.status(400).json({ success: false, message: 'Valid email address is required.' });
+      }
+      if (!password || password.length < 6) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+      }
+      if (confirmPassword && password !== confirmPassword) {
+        return res.status(400).json({ success: false, message: 'Passwords do not match.' });
+      }
+
+      const existingUser = await findUserByIdentifier(userEmail);
+      if (existingUser && existingUser.email.toLowerCase() === userEmail) {
+        return res.status(400).json({ success: false, message: 'An account with this email address already exists.' });
+      }
+
+      const existingPhone = await findUserByIdentifier(userPhone);
+      if (existingPhone && existingPhone.phone === userPhone) {
+        return res.status(400).json({ success: false, message: 'An account with this mobile number already exists.' });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 10);
+      const user = await createUser({
+        name: name.trim(),
+        email: userEmail,
+        phone: userPhone,
+        passwordHash,
+        role: 'CUSTOMER'
+      });
+
+      const token = jwt.sign(
+        { id: user.id, name: user.name, email: user.email, phone: user.phone, role: 'CUSTOMER' },
+        JWT_SECRET,
+        { expiresIn: '30d' }
+      );
+
+      res.cookie('customer_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000
+      });
+
+      res.json({
+        success: true,
+        token,
+        user
+      });
+    } catch (err: any) {
+      console.error('Registration error:', err);
+      res.status(500).json({ success: false, message: err.message || 'Registration failed.' });
+    }
+  });
+
+  // 2. Customer Login API
+  app.post('/api/auth/login', async (req: Request, res: Response) => {
+    try {
+      const { identifier, email, phone, password } = req.body;
+      const loginId = (identifier || email || phone || '').trim();
+
+      if (!loginId || !password) {
+        return res.status(400).json({ success: false, message: 'Email or Mobile number and password are required.' });
+      }
+
+      const user = await findUserByIdentifier(loginId);
+      if (!user) {
+        return res.status(401).json({ success: false, message: 'No account found with this email or mobile number.' });
+      }
+
+      if (user.is_active === false) {
+        return res.status(403).json({ success: false, message: 'Account is deactivated. Please contact store admin.' });
+      }
+
+      const isMatch = await bcrypt.compare(password, user.password_hash);
+      if (!isMatch) {
+        return res.status(401).json({ success: false, message: 'Incorrect password. Please try again.' });
+      }
+
+      const userRole = user.role || 'CUSTOMER';
+      const token = jwt.sign(
+        { id: user.id, name: user.name, email: user.email, phone: user.phone, role: userRole },
+        JWT_SECRET,
+        { expiresIn: '30d' }
+      );
+
+      res.cookie('customer_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000
+      });
+
+      const { password_hash, ...safeUser } = user;
+      res.json({
+        success: true,
+        token,
+        user: safeUser
+      });
+    } catch (err: any) {
+      console.error('Login error:', err);
+      res.status(500).json({ success: false, message: 'Login failed due to server error.' });
+    }
+  });
+
+  // 3. Customer Profile Get API
+  app.get('/api/customer/profile', authenticateCustomer, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user.id;
+      const user = await findUserById(userId);
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found.' });
+      }
+      res.json({ success: true, user });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // 4. Customer Profile Update API
+  app.put('/api/customer/profile', authenticateCustomer, async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user.id;
+      const { name, email, phone, password } = req.body;
+
+      let passwordHash = undefined;
+      if (password && password.trim().length > 0) {
+        if (password.length < 6) {
+          return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+        }
+        passwordHash = await bcrypt.hash(password, 10);
+      }
+
+      const updatedUser = await updateUserProfile(userId, {
+        name,
+        email,
+        phone,
+        passwordHash
+      });
+
+      if (!updatedUser) {
+        return res.status(400).json({ success: false, message: 'Failed to update profile.' });
+      }
+
+      // Re-issue updated JWT token
+      const token = jwt.sign(
+        { id: updatedUser.id, name: updatedUser.name, email: updatedUser.email, phone: updatedUser.phone, role: 'CUSTOMER' },
+        JWT_SECRET,
+        { expiresIn: '30d' }
+      );
+
+      res.json({ success: true, user: updatedUser, token });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // 5. Customer Orders List API
+  app.get('/api/customer/orders', authenticateCustomer, async (req: AuthRequest, res: Response) => {
+    try {
+      const userOrders = await getOrdersForCustomer(req.user);
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+      const host = req.headers.host;
+      const baseUrl = process.env.BASE_URL || `${protocol}://${host}`;
+
+      const ordersWithUrls = userOrders.map(order => ({
+        ...order,
+        documents: (order.documents || []).map((doc: any) => ({
+          ...doc,
+          downloadUrl: `${baseUrl}/api/documents/download/${doc.download_token || doc.downloadToken}`
+        }))
+      }));
+
+      res.json({ success: true, orders: ordersWithUrls });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // 6. CUSTOMER MULTI-FILE ORDER CREATION API (AUTHENTICATED ONLY - NO GUESTS)
+  app.post('/api/orders', upload.array('documents', 10), async (req: AuthRequest, res: Response) => {
+    try {
+      // Check customer token from Authorization header or cookie
+      const authHeader = req.headers.authorization;
+      let token = '';
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.split(' ')[1];
+      } else if (req.headers.cookie) {
+        const cookies = req.headers.cookie.split(';').reduce((acc: any, c) => {
+          const [k, v] = c.trim().split('=');
+          acc[k] = v;
+          return acc;
+        }, {});
+        token = cookies.customer_token;
+      }
+
+      let customerUser = null;
+      if (token) {
+        try {
+          customerUser = jwt.verify(token, JWT_SECRET) as any;
+        } catch (e) {}
+      }
+
+      if (!customerUser) {
+        return res.status(401).json({
+          success: false,
+          message: 'Please login or create an account to place an order.'
+        });
+      }
+
       const files = req.files as Express.Multer.File[];
       const {
         customerName,
@@ -285,7 +544,10 @@ Sitemap: ${domain}/sitemap.xml
         totalPrice
       } = req.body;
 
-      if (!customerName || !customerPhone) {
+      const finalName = customerName || customerUser.name;
+      const finalPhone = customerPhone || customerUser.phone;
+
+      if (!finalName || !finalPhone) {
         return res.status(400).json({ success: false, message: 'Customer name and phone number are required.' });
       }
 
@@ -320,8 +582,9 @@ Sitemap: ${domain}/sitemap.xml
 
       const orderPayload = {
         orderId,
-        customerName,
-        customerPhone,
+        customerId: customerUser.id,
+        customerName: finalName,
+        customerPhone: finalPhone,
         service: service || 'PDF Printing',
         quantity: parseInt(quantity) || 1,
         pagesPerCopy: parseInt(pagesPerCopy) || 1,
@@ -346,8 +609,8 @@ Sitemap: ${domain}/sitemap.xml
 
       const waText = `Hi Nithish Graphics! I would like to place an order:\n\n` +
         `🆔 Order ID: #${orderId}\n` +
-        `👤 Name: ${customerName}\n` +
-        `📞 Phone: ${customerPhone}\n` +
+        `👤 Name: ${finalName}\n` +
+        `📞 Phone: ${finalPhone}\n` +
         `🖨️ Service: ${orderPayload.service}\n` +
         `📊 Copies: ${orderPayload.quantity} (Pages per copy: ${orderPayload.pagesPerCopy})\n` +
         `🎨 Print Option: ${orderPayload.colorType.toUpperCase()} | ${orderPayload.printSide === 'double' ? 'Double Sided' : 'Single Sided'} (${orderPayload.paperSize})\n` +
@@ -406,7 +669,7 @@ Sitemap: ${domain}/sitemap.xml
       }
 
       const token = jwt.sign(
-        { email, role: 'admin' },
+        { email, role: 'ADMIN' },
         JWT_SECRET,
         { expiresIn: '24h' }
       );
@@ -429,7 +692,29 @@ Sitemap: ${domain}/sitemap.xml
     }
   });
 
-  // 2. Get All Orders (Admin Protected)
+  // 2. Get All Customers (Admin Protected)
+  app.get('/api/admin/customers', authenticateAdmin, async (req: Request, res: Response) => {
+    try {
+      const customers = await getAllCustomers();
+      res.json({ success: true, customers });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // 3. Toggle Customer Status (Admin Protected)
+  app.put('/api/admin/customers/:id/status', authenticateAdmin, async (req: Request, res: Response) => {
+    try {
+      const customerId = req.params.id;
+      const { isActive } = req.body;
+      const updated = await toggleCustomerActive(customerId, isActive);
+      res.json({ success: true, customer: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // 4. Get All Orders (Admin Protected)
   app.get('/api/admin/orders', authenticateAdmin, async (req: Request, res: Response) => {
     try {
       const orders = await getAllOrders();

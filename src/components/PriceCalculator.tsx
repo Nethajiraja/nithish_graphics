@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, Upload, MessageSquare, Check, FileText, Sparkles, AlertCircle, X, ShieldCheck, ExternalLink, Loader2 } from 'lucide-react';
-import { BusinessInfo, PricingRate } from '../types';
+import { Calculator, Upload, MessageSquare, Check, FileText, Sparkles, AlertCircle, X, ShieldCheck, ExternalLink, Loader2, LogIn, Lock } from 'lucide-react';
+import { BusinessInfo, PricingRate, CustomerUser } from '../types';
 
 interface PriceCalculatorProps {
   info: BusinessInfo;
+  customerUser?: CustomerUser | null;
+  customerToken?: string | null;
   navigate?: (path: string) => void;
 }
 
-export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info }) => {
+export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info, customerUser, customerToken, navigate }) => {
   const [pages, setPages] = useState<number>(30);
   const [copies, setCopies] = useState<number>(1);
   const [printType, setPrintType] = useState<'bw' | 'color'>('bw');
@@ -18,8 +20,15 @@ export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info }) => {
   const [additionalInstructions, setAdditionalInstructions] = useState<string>('');
 
   // Customer Contact Info
-  const [customerName, setCustomerName] = useState<string>('');
-  const [customerPhone, setCustomerPhone] = useState<string>('');
+  const [customerName, setCustomerName] = useState<string>(customerUser?.name || '');
+  const [customerPhone, setCustomerPhone] = useState<string>(customerUser?.phone || '');
+
+  useEffect(() => {
+    if (customerUser) {
+      if (customerUser.name) setCustomerName(customerUser.name);
+      if (customerUser.phone) setCustomerPhone(customerUser.phone);
+    }
+  }, [customerUser]);
 
   // Multi-File Upload State
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
@@ -39,6 +48,18 @@ export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info }) => {
       })
       .catch(() => {});
   }, []);
+
+  // Check login requirement helper
+  const checkAuthAndRedirect = (): boolean => {
+    const token = customerToken || localStorage.getItem('customer_token');
+    if (!token) {
+      if (navigate) {
+        navigate('/login?redirect=/order');
+      }
+      return false;
+    }
+    return true;
+  };
 
   // Per page rate calculation dynamically using backend rates if available
   const bw70Rate = rates.find(r => r.name.includes('70 GSM')) || { priceSingle: 2.0, priceDouble: 1.5 };
@@ -78,10 +99,12 @@ export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info }) => {
 
   // File addition & page estimation
   const handleFilesAdded = (newFiles: FileList | File[]) => {
+    if (!checkAuthAndRedirect()) return;
+
     const validArray = Array.from(newFiles);
     setUploadedFiles(prev => [...prev, ...validArray]);
 
-    // Estimate pages from first PDF or multi-file total size
+    // Estimate pages from multi-file total size
     let totalEstPages = 0;
     validArray.forEach(file => {
       const est = Math.min(Math.max(Math.round(file.size / 45000), 4), 150);
@@ -99,6 +122,10 @@ export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info }) => {
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+
+    if (!checkAuthAndRedirect()) {
+      return;
+    }
 
     if (!customerName.trim() || !customerPhone.trim()) {
       setErrorMessage('Please provide your name and phone number to complete the order.');
@@ -126,12 +153,23 @@ export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info }) => {
         formData.append('documents', file);
       });
 
+      const activeToken = customerToken || localStorage.getItem('customer_token') || '';
+
       const res = await fetch('/api/orders', {
         method: 'POST',
+        headers: {
+          Authorization: `Bearer ${activeToken}`
+        },
         body: formData
       });
 
       const data = await res.json();
+      if (res.status === 401) {
+        if (navigate) navigate('/login?redirect=/order');
+        setErrorMessage('Please login or create an account to place an order.');
+        return;
+      }
+
       if (data.success) {
         setOrderResult(data);
       } else {
@@ -147,9 +185,9 @@ export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info }) => {
   return (
     <div className="bg-white rounded-2xl shadow-xl border border-slate-200/80 overflow-hidden">
       {/* Card Header */}
-      <div className="bg-slate-900 text-white p-6 sm:p-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="bg-linear-to-r from-slate-900 to-blue-950 text-white p-6 sm:p-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div className="flex items-center space-x-3">
-          <div className="p-2.5 bg-blue-600 rounded-xl">
+          <div className="p-2.5 bg-orange-600 rounded-xl">
             <Calculator className="w-6 h-6 text-white" />
           </div>
           <div>
@@ -162,6 +200,33 @@ export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info }) => {
           </div>
         </div>
       </div>
+
+      {/* Guest Notice Banner */}
+      {!customerUser && (
+        <div className="mx-6 mt-6 sm:mx-8 sm:mt-8 p-4 bg-amber-50 border border-amber-300 rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 text-xs">
+          <div className="flex items-center space-x-2 text-amber-900 font-semibold">
+            <Lock className="w-4 h-4 text-orange-600 shrink-0" />
+            <span>Please login or create an account to place an order.</span>
+          </div>
+          <div className="flex items-center space-x-2 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => navigate && navigate('/login?redirect=/order')}
+              className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-lg transition-colors flex items-center space-x-1 cursor-pointer"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Login</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate && navigate('/register?redirect=/order')}
+              className="px-4 py-2 bg-blue-900 hover:bg-blue-950 text-white font-bold rounded-lg transition-colors cursor-pointer"
+            >
+              <span>Register</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handlePlaceOrder} className="p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Left column: Controls & Upload */}
