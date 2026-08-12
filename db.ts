@@ -636,6 +636,21 @@ export async function findUserByIdentifier(identifier: string): Promise<any | nu
   return users.find((u: any) => u.email.toLowerCase() === term || u.phone === identifier.trim()) || null;
 }
 
+export async function findUserByPhone(phone: string): Promise<any | null> {
+  const cleanPhone = phone.replace(/[^0-9]/g, '').trim();
+
+  if (pool) {
+    const res = await pool.query(
+      `SELECT * FROM users WHERE phone = $1 OR phone = $2 LIMIT 1`,
+      [cleanPhone, phone.trim()]
+    );
+    return res.rows[0] || null;
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  return users.find((u: any) => u.phone && (u.phone === phone.trim() || u.phone.replace(/[^0-9]/g, '') === cleanPhone)) || null;
+}
+
 export async function findUserById(id: number | string): Promise<any | null> {
   if (pool) {
     const res = await pool.query(`SELECT id, name, email, phone, role, is_active, created_at FROM users WHERE id = $1`, [id]);

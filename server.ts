@@ -20,6 +20,7 @@ import {
   getAdminByEmail,
   createUser,
   findUserByIdentifier,
+  findUserByPhone,
   findUserById,
   updateUserProfile,
   getAllCustomers,
@@ -330,10 +331,7 @@ Sitemap: ${domain}/sitemap.xml
         return res.status(400).json({ success: false, message: 'Full Name is required.' });
       }
       if (!userPhone || !/^[0-9]{10,12}$/.test(userPhone.replace(/[^0-9]/g, ''))) {
-        return res.status(400).json({ success: false, message: 'Valid mobile number is required.' });
-      }
-      if (!userEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userEmail)) {
-        return res.status(400).json({ success: false, message: 'Valid email address is required.' });
+        return res.status(400).json({ success: false, message: 'Valid 10-digit mobile number is required.' });
       }
       if (!password || password.length < 6) {
         return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
@@ -342,20 +340,15 @@ Sitemap: ${domain}/sitemap.xml
         return res.status(400).json({ success: false, message: 'Passwords do not match.' });
       }
 
-      const existingUser = await findUserByIdentifier(userEmail);
-      if (existingUser && existingUser.email.toLowerCase() === userEmail) {
-        return res.status(400).json({ success: false, message: 'An account with this email address already exists.' });
-      }
-
-      const existingPhone = await findUserByIdentifier(userPhone);
-      if (existingPhone && existingPhone.phone === userPhone) {
-        return res.status(400).json({ success: false, message: 'An account with this mobile number already exists.' });
+      const existingPhone = await findUserByPhone(userPhone);
+      if (existingPhone) {
+        return res.status(400).json({ success: false, message: 'An account with this mobile number already exists. Please login.' });
       }
 
       const passwordHash = await bcrypt.hash(password, 10);
       const user = await createUser({
         name: name.trim(),
-        email: userEmail,
+        email: userEmail || `${userPhone}@nithishgraphics.customer`,
         phone: userPhone,
         passwordHash,
         role: 'CUSTOMER'
@@ -385,23 +378,27 @@ Sitemap: ${domain}/sitemap.xml
     }
   });
 
-  // 2. Customer Login API
+  // 2. Customer Login API (Strictly Phone Number + Password)
   app.post('/api/auth/login', async (req: Request, res: Response) => {
     try {
-      const { identifier, email, phone, password } = req.body;
-      const loginId = (identifier || email || phone || '').trim();
+      const { identifier, phone, mobileNumber, password } = req.body;
+      const rawPhone = (phone || mobileNumber || identifier || '').trim();
 
-      if (!loginId || !password) {
-        return res.status(400).json({ success: false, message: 'Email or Mobile number and password are required.' });
+      if (!rawPhone || !password) {
+        return res.status(400).json({ success: false, message: 'Mobile number and password are required.' });
       }
 
-      const user = await findUserByIdentifier(loginId);
+      const user = (await findUserByPhone(rawPhone)) || (await findUserByIdentifier(rawPhone));
       if (!user) {
-        return res.status(401).json({ success: false, message: 'No account found with this email or mobile number.' });
+        return res.status(401).json({ success: false, message: 'No customer account found with this mobile number.' });
       }
 
       if (user.is_active === false) {
         return res.status(403).json({ success: false, message: 'Account is deactivated. Please contact store admin.' });
+      }
+
+      if (!user.password_hash) {
+        return res.status(401).json({ success: false, message: 'Password is not set for this account.' });
       }
 
       const isMatch = await bcrypt.compare(password, user.password_hash);
@@ -409,7 +406,7 @@ Sitemap: ${domain}/sitemap.xml
         return res.status(401).json({ success: false, message: 'Incorrect password. Please try again.' });
       }
 
-      const userRole = user.role || 'CUSTOMER';
+      const userRole = 'CUSTOMER';
       const token = jwt.sign(
         { id: user.id, name: user.name, email: user.email, phone: user.phone, role: userRole },
         JWT_SECRET,
@@ -424,6 +421,8 @@ Sitemap: ${domain}/sitemap.xml
       });
 
       const { password_hash, ...safeUser } = user;
+      safeUser.role = userRole;
+
       res.json({
         success: true,
         token,
