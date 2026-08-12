@@ -14,15 +14,23 @@ import { PricingPage } from './pages/PricingPage';
 import { ContactPage } from './pages/ContactPage';
 import { AboutPage } from './pages/AboutPage';
 import { OrderPage } from './pages/OrderPage';
-import { AdminPage } from './pages/AdminPage';
 import { CustomerOrdersPage } from './pages/CustomerOrdersPage';
+
+// Admin Portal Pages
+import { AdminLoginPage } from './pages/admin/AdminLoginPage';
+import { AdminDashboardPage } from './pages/admin/AdminDashboardPage';
+import { AdminPricingPage } from './pages/admin/AdminPricingPage';
+import { AdminSettingsPage } from './pages/admin/AdminSettingsPage';
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState<string>(() => window.location.pathname || '/');
   const [storeInfo, setStoreInfo] = useState<BusinessInfo>(initialBusinessInfo);
   const [services] = useState<ServiceItem[]>(defaultServices);
-  const [pricingRates] = useState<PricingRate[]>(defaultPricingRates);
+  const [pricingRates, setPricingRates] = useState<PricingRate[]>(defaultPricingRates);
   const [isSeoModalOpen, setIsSeoModalOpen] = useState<boolean>(false);
+
+  // Admin JWT Token authentication state
+  const [adminToken, setAdminToken] = useState<string | null>(() => localStorage.getItem('admin_token'));
 
   // Sync client router with window location
   useEffect(() => {
@@ -33,7 +41,7 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Fetch business store configuration from server
+  // Fetch business store configuration & dynamic pricing from server
   useEffect(() => {
     fetch('/api/info')
       .then((res) => res.json())
@@ -42,9 +50,16 @@ export default function App() {
           setStoreInfo((prev) => ({ ...prev, ...data }));
         }
       })
-      .catch(() => {
-        // Fallback to local initial info if server offline
-      });
+      .catch(() => {});
+
+    fetch('/api/pricing')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setPricingRates(data);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const navigate = (path: string) => {
@@ -55,6 +70,12 @@ export default function App() {
 
   const handleUpdateStoreInfo = (updated: Partial<BusinessInfo>) => {
     setStoreInfo((prev) => ({ ...prev, ...updated }));
+  };
+
+  const handleAdminLogout = () => {
+    localStorage.removeItem('admin_token');
+    setAdminToken(null);
+    navigate('/admin/login');
   };
 
   // Get current SEO Metadata
@@ -91,15 +112,79 @@ export default function App() {
     if (currentPath === '/order') {
       return <OrderPage info={storeInfo} navigate={navigate} />;
     }
-    if (currentPath.startsWith('/admin')) {
+
+    // Admin Portal Routing
+    if (currentPath === '/admin/login') {
       return (
-        <AdminPage
+        <AdminLoginPage
           info={storeInfo}
-          onUpdateInfo={handleUpdateStoreInfo}
+          onLoginSuccess={(token) => setAdminToken(token)}
           navigate={navigate}
         />
       );
     }
+
+    if (currentPath === '/admin/dashboard' || currentPath === '/admin') {
+      if (!adminToken) {
+        return (
+          <AdminLoginPage
+            info={storeInfo}
+            onLoginSuccess={(token) => setAdminToken(token)}
+            navigate={navigate}
+          />
+        );
+      }
+      return (
+        <AdminDashboardPage
+          info={storeInfo}
+          token={adminToken}
+          onLogout={handleAdminLogout}
+          navigate={navigate}
+        />
+      );
+    }
+
+    if (currentPath === '/admin/pricing') {
+      if (!adminToken) {
+        return (
+          <AdminLoginPage
+            info={storeInfo}
+            onLoginSuccess={(token) => setAdminToken(token)}
+            navigate={navigate}
+          />
+        );
+      }
+      return (
+        <AdminPricingPage
+          info={storeInfo}
+          token={adminToken}
+          onLogout={handleAdminLogout}
+          navigate={navigate}
+        />
+      );
+    }
+
+    if (currentPath === '/admin/settings') {
+      if (!adminToken) {
+        return (
+          <AdminLoginPage
+            info={storeInfo}
+            onLoginSuccess={(token) => setAdminToken(token)}
+            navigate={navigate}
+          />
+        );
+      }
+      return (
+        <AdminSettingsPage
+          info={storeInfo}
+          token={adminToken}
+          onUpdateInfo={handleUpdateStoreInfo}
+          onLogout={handleAdminLogout}
+          navigate={navigate}
+        />
+      );
+    }
+
     if (currentPath.startsWith('/customer')) {
       return <CustomerOrdersPage info={storeInfo} navigate={navigate} />;
     }
@@ -108,6 +193,8 @@ export default function App() {
     return <HomePage info={storeInfo} services={services} navigate={navigate} />;
   };
 
+  const isAdminRoute = currentPath.startsWith('/admin');
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col justify-between selection:bg-blue-600 selection:text-white">
       {/* Dynamic SEO Meta Tags & JSON-LD Schema Injection */}
@@ -115,21 +202,25 @@ export default function App() {
 
       {/* Main App Layout */}
       <div>
-        <Navbar
-          currentPath={currentPath}
-          navigate={navigate}
-          info={storeInfo}
-          onOpenSeoInspector={() => setIsSeoModalOpen(true)}
-        />
+        {!isAdminRoute && (
+          <Navbar
+            currentPath={currentPath}
+            navigate={navigate}
+            info={storeInfo}
+            onOpenSeoInspector={() => setIsSeoModalOpen(true)}
+          />
+        )}
         <main>{renderContent()}</main>
       </div>
 
       {/* Footer */}
-      <Footer
-        navigate={navigate}
-        info={storeInfo}
-        onOpenSeoInspector={() => setIsSeoModalOpen(true)}
-      />
+      {!isAdminRoute && (
+        <Footer
+          navigate={navigate}
+          info={storeInfo}
+          onOpenSeoInspector={() => setIsSeoModalOpen(true)}
+        />
+      )}
 
       {/* Technical SERP & Schema Inspector Modal */}
       <GoogleSearchPreviewModal

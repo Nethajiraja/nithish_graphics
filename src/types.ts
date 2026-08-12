@@ -22,6 +22,8 @@ export interface BusinessInfo {
   openingHours: string;
   canonicalDomain: string;
   googleSiteVerification: string;
+  whatsappTemplate?: string;
+  minOrderQuantity?: number;
 }
 
 export interface PricingRate {
@@ -32,24 +34,52 @@ export interface PricingRate {
   priceSingle: number;
   priceDouble?: number;
   description: string;
+  isActive?: boolean;
+}
+
+export interface OrderDocument {
+  document_id?: number;
+  original_filename: string;
+  stored_filename?: string;
+  mime_type: string;
+  file_size: number;
+  download_token?: string;
+  downloadUrl?: string;
+  created_at?: string;
 }
 
 export interface OrderItem {
-  id: string;
-  createdAt: string;
-  customerName: string;
-  phone: string;
-  serviceType: string;
-  copies: number;
-  pagesPerCopy: number;
-  printType: 'bw' | 'color';
-  sides: 'single' | 'double';
-  paperGsm: string;
-  bindingType: string;
-  notes: string;
-  totalAmount: number;
-  fileName?: string;
-  status: 'pending' | 'processing' | 'completed' | 'delivered';
+  order_id?: string;
+  id?: string;
+  created_at?: string;
+  createdAt?: string;
+  customer_name?: string;
+  customerName?: string;
+  customer_phone?: string;
+  phone?: string;
+  service?: string;
+  serviceType?: string;
+  quantity?: number;
+  copies?: number;
+  pages_per_copy?: number;
+  pagesPerCopy?: number;
+  color_type?: string;
+  printType?: 'bw' | 'color';
+  paper_size?: string;
+  paper_gsm?: string;
+  paperGsm?: string;
+  print_side?: string;
+  sides?: 'single' | 'double';
+  binding_type?: string;
+  bindingType?: string;
+  additional_instructions?: string;
+  notes?: string;
+  total_price?: number;
+  totalAmount?: number;
+  payment_status?: string;
+  order_status?: string;
+  status?: string;
+  documents?: OrderDocument[];
 }
 
 export interface PageSeoMeta {
