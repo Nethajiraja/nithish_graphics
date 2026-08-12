@@ -1,6 +1,11 @@
 import { createApp } from '../server';
 
+let appPromise: any = null;
+
 export default async function handler(req: any, res: any) {
-  const app = await createApp();
+  if (!appPromise) {
+    appPromise = createApp();
+  }
+  const app = await appPromise;
   return app(req, res);
 }

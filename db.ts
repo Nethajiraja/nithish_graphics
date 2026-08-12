@@ -162,7 +162,12 @@ export const INITIAL_PRICING_RATES = [
   }
 ];
 
+let isDbInitialized = false;
+
 export async function initDatabase() {
+  if (isDbInitialized) return;
+  isDbInitialized = true;
+
   if (pool) {
     try {
       console.log('Connecting to PostgreSQL database...');
