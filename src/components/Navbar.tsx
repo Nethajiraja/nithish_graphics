@@ -19,6 +19,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentPath, navigate, info, cus
     { label: 'Services', path: '/services' },
     { label: 'Pricing Rates', path: '/pricing' },
     { label: 'Place Order', path: '/order' },
+    { label: 'Track Order', path: '/track-order' },
     { label: 'About', path: '/about' },
     { label: 'Contact', path: '/contact' }
   ];

@@ -48,7 +48,7 @@ export const HomePage: React.FC<HomePageProps> = ({ info, services, navigate }) 
 
             {/* MANDATORY H1 HEADING */}
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight mb-6">
-              Nithish Graphics – Professional Printing & Binding Services
+              Nithish Graphics – Online Printing &amp; Print Services
             </h1>
 
             {/* NATURAL KEYWORD PARAGRAPH */}

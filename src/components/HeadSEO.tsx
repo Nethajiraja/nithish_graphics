@@ -8,6 +8,9 @@ interface HeadSEOProps {
 
 export const HeadSEO: React.FC<HeadSEOProps> = ({ meta, info }) => {
   useEffect(() => {
+    const domain = (info.canonicalDomain || 'https://www.nithishgraphics.com').replace(/\/$/, '');
+    const logoUrl = meta.ogImage || `${domain}/assets/nithish-graphics-logo.png`;
+
     // Set Document Title
     document.title = meta.title;
 
@@ -41,7 +44,7 @@ export const HeadSEO: React.FC<HeadSEOProps> = ({ meta, info }) => {
       updateMeta('name', 'keywords', meta.keywords.join(', '));
     }
 
-    // 3. Robots meta tag
+    // 3. Robots meta tag (Strict exclusion on private customer / admin routes)
     if (meta.isPrivate) {
       updateMeta('name', 'robots', 'noindex, nofollow, noarchive');
     } else {
@@ -57,12 +60,14 @@ export const HeadSEO: React.FC<HeadSEOProps> = ({ meta, info }) => {
     updateMeta('property', 'og:description', meta.description);
     updateMeta('property', 'og:url', meta.canonicalUrl);
     updateMeta('property', 'og:type', meta.ogType || 'website');
+    updateMeta('property', 'og:image', logoUrl);
     updateMeta('property', 'og:locale', 'en_IN');
 
     // 6. Twitter Card Meta Tags
     updateMeta('name', 'twitter:card', 'summary_large_image');
     updateMeta('name', 'twitter:title', meta.title);
     updateMeta('name', 'twitter:description', meta.description);
+    updateMeta('name', 'twitter:image', logoUrl);
 
     // 7. Google Site Verification Meta Tag
     const gCode = info.googleSiteVerification || ((import.meta as any).env?.VITE_GOOGLE_SITE_VERIFICATION as string);

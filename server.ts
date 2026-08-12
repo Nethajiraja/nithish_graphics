@@ -30,12 +30,22 @@ import {
   createGoogleUser,
   linkGoogleAccount,
   updateCustomerMobile,
+  linkOrdersToCustomer,
   getAllServices,
   getServiceById,
   createService,
   updateService,
   toggleServiceActive,
-  deleteService
+  deleteService,
+  // Order management functions (previously missing — root cause of sync bug)
+  generateOrderNumber,
+  getAdminOrdersFiltered,
+  getOrderById,
+  getOrderByNumber,
+  getOrderStatusHistory,
+  recordStatusChange,
+  getDashboardStats,
+  trackOrderByNumberAndPhone
 } from './db.js';
 
 dotenv.config();
@@ -239,7 +249,10 @@ export async function createApp() {
       { url: '/pricing', priority: '0.8', changefreq: 'weekly' },
       { url: '/contact', priority: '0.8', changefreq: 'monthly' },
       { url: '/about', priority: '0.7', changefreq: 'monthly' },
-      { url: '/order', priority: '0.9', changefreq: 'daily' }
+      { url: '/order', priority: '0.9', changefreq: 'daily' },
+      { url: '/track-order', priority: '0.8', changefreq: 'daily' },
+      { url: '/login', priority: '0.6', changefreq: 'monthly' },
+      { url: '/register', priority: '0.6', changefreq: 'monthly' }
     ];
 
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -265,8 +278,7 @@ ${publicRoutes.map(route => `  <url>
     const content = `User-agent: *
 Allow: /
 Disallow: /admin/
-Disallow: /admin/login
-Disallow: /admin/dashboard
+Disallow: /customer/
 Disallow: /api/
 Disallow: /uploads/
 
@@ -274,6 +286,14 @@ Sitemap: ${domain}/sitemap.xml
 `;
     res.header('Content-Type', 'text/plain');
     res.send(content);
+  });
+
+  // 2b. DYNAMIC GOOGLE SEARCH CONSOLE HTML FILE VERIFICATION ENDPOINT
+  // Automatically answers any Google verification request like /google1234567890.html
+  app.get(/^\/google[a-zA-Z0-9_-]+\.html$/, (req: Request, res: Response) => {
+    const filename = path.basename(req.path);
+    res.header('Content-Type', 'text/html');
+    res.send(`google-site-verification: ${filename}`);
   });
 
   // 3. Business Info API (Public)
@@ -340,13 +360,14 @@ Sitemap: ${domain}/sitemap.xml
   app.post('/api/auth/register', async (req: Request, res: Response) => {
     try {
       const { name, mobileNumber, phone, email, password, confirmPassword } = req.body;
-      const userPhone = (mobileNumber || phone || '').trim();
-      const userEmail = (email || '').trim().toLowerCase();
+      const userPhone = (mobileNumber || phone || '').replace(/[^0-9]/g, '').trim();
+      const rawEmail = (email || '').trim();
+      const userEmail = rawEmail ? rawEmail.toLowerCase() : undefined;
 
       if (!name || !name.trim()) {
         return res.status(400).json({ success: false, message: 'Full Name is required.' });
       }
-      if (!userPhone || !/^[0-9]{10,12}$/.test(userPhone.replace(/[^0-9]/g, ''))) {
+      if (!userPhone || !/^[0-9]{10,12}$/.test(userPhone)) {
         return res.status(400).json({ success: false, message: 'Valid 10-digit mobile number is required.' });
       }
       if (!password || password.length < 6) {
@@ -358,20 +379,24 @@ Sitemap: ${domain}/sitemap.xml
 
       const existingPhone = await findUserByPhone(userPhone);
       if (existingPhone) {
-        return res.status(400).json({ success: false, message: 'An account with this mobile number already exists. Please login.' });
+        return res.status(400).json({
+          success: false,
+          code: 'ACCOUNT_EXISTS',
+          message: 'An account already exists with this mobile number. Please login instead.'
+        });
       }
 
       const passwordHash = await bcrypt.hash(password, 10);
       const user = await createUser({
         name: name.trim(),
-        email: userEmail || `${userPhone}@nithishgraphics.customer`,
+        email: userEmail,
         phone: userPhone,
         passwordHash,
         role: 'CUSTOMER'
       });
 
       const token = jwt.sign(
-        { id: user.id, name: user.name, email: user.email, phone: user.phone, role: 'CUSTOMER' },
+        { id: user.id, name: user.name, email: user.email || '', phone: user.phone, role: 'CUSTOMER' },
         JWT_SECRET,
         { expiresIn: '30d' }
       );
@@ -399,12 +424,13 @@ Sitemap: ${domain}/sitemap.xml
     try {
       const { identifier, phone, mobileNumber, password } = req.body;
       const rawPhone = (phone || mobileNumber || identifier || '').trim();
+      const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
 
       if (!rawPhone || !password) {
         return res.status(400).json({ success: false, message: 'Mobile number and password are required.' });
       }
 
-      const user = (await findUserByPhone(rawPhone)) || (await findUserByIdentifier(rawPhone));
+      const user = (await findUserByPhone(rawPhone)) || (await findUserByPhone(cleanPhone)) || (await findUserByIdentifier(rawPhone));
       if (!user) {
         return res.status(401).json({ success: false, message: 'No customer account found with this mobile number.' });
       }
@@ -422,9 +448,14 @@ Sitemap: ${domain}/sitemap.xml
         return res.status(401).json({ success: false, message: 'Incorrect password. Please try again.' });
       }
 
+      // Link any previous unlinked orders matching this user's phone
+      if (user.phone) {
+        await linkOrdersToCustomer(user.id, user.phone);
+      }
+
       const userRole = 'CUSTOMER';
       const token = jwt.sign(
-        { id: user.id, name: user.name, email: user.email, phone: user.phone, role: userRole },
+        { id: user.id, name: user.name, email: user.email || '', phone: user.phone, role: userRole },
         JWT_SECRET,
         { expiresIn: '30d' }
       );
@@ -448,6 +479,49 @@ Sitemap: ${domain}/sitemap.xml
       console.error('Login error:', err);
       res.status(500).json({ success: false, message: 'Login failed due to server error.' });
     }
+  });
+
+  // 3. Current Authenticated User API (Authentication check on page load)
+  app.get('/api/auth/me', async (req: AuthRequest, res: Response) => {
+    try {
+      const authHeader = req.headers.authorization;
+      let token = '';
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.split(' ')[1];
+      } else if (req.headers.cookie) {
+        const cookies = req.headers.cookie.split(';').reduce((acc: any, c) => {
+          const [k, v] = c.trim().split('=');
+          acc[k] = v;
+          return acc;
+        }, {});
+        token = cookies.customer_token;
+      }
+
+      if (!token) {
+        return res.status(401).json({ success: false, message: 'Unauthenticated.' });
+      }
+
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      const user = await findUserById(decoded.id);
+      if (!user || user.is_active === false) {
+        return res.status(401).json({ success: false, message: 'Invalid or deactivated session.' });
+      }
+
+      const { password_hash, ...safeUser } = user;
+      res.json({
+        success: true,
+        token,
+        user: safeUser
+      });
+    } catch (err) {
+      res.status(401).json({ success: false, message: 'Session expired or invalid token.' });
+    }
+  });
+
+  // 4. Logout Customer API
+  app.post('/api/auth/logout', (req: Request, res: Response) => {
+    res.clearCookie('customer_token');
+    res.json({ success: true, message: 'Logged out successfully.' });
   });
 
   // ==================== GOOGLE OAUTH 2.0 ENDPOINTS ====================
@@ -683,10 +757,19 @@ Sitemap: ${domain}/sitemap.xml
   app.put('/api/customer/mobile', authenticateCustomer, async (req: AuthRequest, res: Response) => {
     try {
       const { phone } = req.body;
-      const cleanPhone = (phone || '').trim();
+      const cleanPhone = (phone || '').replace(/[^0-9]/g, '').trim();
 
-      if (!cleanPhone || !/^[0-9]{10}$/.test(cleanPhone.replace(/[\s\-\+\(\)]/g, ''))) {
+      if (!cleanPhone || cleanPhone.length < 10 || cleanPhone.length > 12) {
         return res.status(400).json({ success: false, message: 'Please provide a valid 10-digit mobile number.' });
+      }
+
+      const existingUser = await findUserByPhone(cleanPhone);
+      if (existingUser && String(existingUser.id) !== String(req.user.id)) {
+        return res.status(400).json({
+          success: false,
+          code: 'ACCOUNT_EXISTS',
+          message: 'An account with this mobile number already belongs to another user.'
+        });
       }
 
       const updatedUser = await updateCustomerMobile(req.user.id, cleanPhone);
@@ -694,12 +777,14 @@ Sitemap: ${domain}/sitemap.xml
         return res.status(404).json({ success: false, message: 'Customer account not found.' });
       }
 
+      await linkOrdersToCustomer(req.user.id, cleanPhone);
+
       const userRole = 'CUSTOMER';
       const token = jwt.sign(
         {
           id: updatedUser.id,
           name: updatedUser.name,
-          email: updatedUser.email,
+          email: updatedUser.email || '',
           phone: updatedUser.phone,
           role: userRole,
           google_id: updatedUser.google_id,
@@ -852,6 +937,8 @@ Sitemap: ${domain}/sitemap.xml
       }
 
       const orderId = req.body.orderId || `ORD-${Date.now().toString().slice(-6)}`;
+      const orderNumber = await generateOrderNumber();
+      req.body.orderId = orderId;
       const protocol = req.headers['x-forwarded-proto'] || req.protocol;
       const host = req.headers.host;
       const baseUrl = process.env.BASE_URL || `${protocol}://${host}`;
@@ -882,6 +969,7 @@ Sitemap: ${domain}/sitemap.xml
 
       const orderPayload = {
         orderId,
+        orderNumber,
         customerId: customerUser.id,
         customerName: finalName,
         customerPhone: finalPhone,
@@ -908,7 +996,7 @@ Sitemap: ${domain}/sitemap.xml
         : '';
 
       const waText = `Hi Nithish Graphics! I would like to place an order:\n\n` +
-        `🆔 Order ID: #${orderId}\n` +
+        `🆔 Order ID: ${orderNumber}\n` +
         `👤 Name: ${finalName}\n` +
         `📞 Phone: ${finalPhone}\n` +
         `🖨️ Service: ${orderPayload.service}\n` +
@@ -917,6 +1005,7 @@ Sitemap: ${domain}/sitemap.xml
         `📚 Binding: ${orderPayload.bindingType}\n` +
         (additionalInstructions ? `📝 Instructions: ${additionalInstructions}\n` : '') +
         `💰 Total Price: ₹${orderPayload.totalPrice}\n` +
+        `📋 Status: Pending\n` +
         filesText + `\n\nPlease confirm availability and turnaround time. Thank you!`;
 
       const waNumber = (storeSettings.whatsapp || '917598730609').replace(/[^0-9]/g, '');
@@ -928,6 +1017,7 @@ Sitemap: ${domain}/sitemap.xml
       res.json({
         success: true,
         orderId,
+        orderNumber,
         order: result.order,
         documents: result.documents,
         whatsappUrl,
@@ -1101,15 +1191,19 @@ Sitemap: ${domain}/sitemap.xml
     }
   });
 
-  // 4. Get All Orders (Admin Protected)
-  app.get('/api/admin/orders', authenticateAdmin, async (req: Request, res: Response) => {
+  // 4. Get All Orders (Admin Protected) - with backend search + filter
+  app.get('/api/admin/orders', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const orders = await getAllOrders();
+      const search = String(req.query.search || '');
+      const status = String(req.query.status || 'all');
+      const page = parseInt(String(req.query.page || '1'));
+      const limit = parseInt(String(req.query.limit || '100'));
+
+      const { orders, total } = await getAdminOrdersFiltered({ search, status, page, limit });
       const protocol = req.headers['x-forwarded-proto'] || req.protocol;
       const host = req.headers.host;
       const baseUrl = process.env.BASE_URL || `${protocol}://${host}`;
 
-      // Attach full download URL for each document
       const ordersWithUrls = orders.map(order => ({
         ...order,
         documents: (order.documents || []).map((doc: any) => ({
@@ -1118,14 +1212,41 @@ Sitemap: ${domain}/sitemap.xml
         }))
       }));
 
-      res.json({ success: true, orders: ordersWithUrls });
+      res.json({ success: true, orders: ordersWithUrls, total });
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
     }
   });
 
-  // 3. Update Order Status (Admin Protected)
-  app.put('/api/admin/orders/:id/status', authenticateAdmin, async (req: Request, res: Response) => {
+  // 4b. Get Single Order (Admin Protected)
+  app.get('/api/admin/orders/:orderId', authenticateAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const orderId = req.params.orderId;
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+      const host = req.headers.host;
+      const baseUrl = process.env.BASE_URL || `${protocol}://${host}`;
+
+      // Try by order_id first, then order_number
+      let order = await getOrderById(orderId);
+      if (!order) {
+        order = await getOrderByNumber(orderId);
+      }
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found.' });
+      }
+      order.documents = (order.documents || []).map((doc: any) => ({
+        ...doc,
+        downloadUrl: `${baseUrl}/api/documents/download/${doc.download_token || doc.downloadToken}`
+      }));
+      const history = await getOrderStatusHistory(order.order_id);
+      res.json({ success: true, order, history });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // 3. Update Order Status (Admin Protected) - records status history
+  app.put('/api/admin/orders/:id/status', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const orderId = req.params.id;
       const { orderStatus, paymentStatus } = req.body;
@@ -1134,8 +1255,150 @@ Sitemap: ${domain}/sitemap.xml
         return res.status(400).json({ success: false, message: 'Order status is required.' });
       }
 
-      const updated = await updateOrderStatus(orderId, orderStatus, paymentStatus);
+      // Normalize to lowercase — single source of truth format
+      const normalizedStatus = String(orderStatus).toLowerCase().trim();
+      const validStatuses = ['pending', 'confirmed', 'printing', 'ready', 'completed', 'cancelled'];
+      if (!validStatuses.includes(normalizedStatus)) {
+        return res.status(400).json({ success: false, message: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+      }
+
+      // Get current order (try by order_id first, then by order_number)
+      let currentOrder = await getOrderById(orderId);
+      if (!currentOrder) {
+        currentOrder = await getOrderByNumber(orderId);
+      }
+      if (!currentOrder) {
+        return res.status(404).json({ success: false, message: 'Order not found.' });
+      }
+
+      const previousStatus = currentOrder.order_status || null;
+      const updated = await updateOrderStatus(currentOrder.order_id, normalizedStatus, paymentStatus);
+
+      // Record status change in history
+      if (updated) {
+        const adminEmail = req.user?.email || 'Admin';
+        await recordStatusChange(currentOrder.order_id, previousStatus, normalizedStatus, adminEmail);
+      }
+
       res.json({ success: true, order: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Admin Dashboard Statistics
+  app.get('/api/admin/dashboard/stats', authenticateAdmin, async (req: Request, res: Response) => {
+    try {
+      const stats = await getDashboardStats();
+      res.json({ success: true, stats });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Public: Track order by order_number + phone (supports both orderNumber and orderId query params)
+  app.get('/api/orders/track', async (req: Request, res: Response) => {
+    try {
+      // Accept both orderNumber and orderId as query params
+      const rawOrderNum = String(req.query.orderNumber || req.query.orderId || '').trim().toUpperCase();
+      const phone = String(req.query.phone || '').trim();
+
+      if (!rawOrderNum || !phone) {
+        return res.status(400).json({ success: false, message: 'Order ID and mobile number are required.' });
+      }
+
+      const order = await trackOrderByNumberAndPhone(rawOrderNum, phone);
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found. Please check your Order ID and mobile number.' });
+      }
+
+      const history = await getOrderStatusHistory(order.order_id);
+
+      // Return safe subset (no documents download tokens for public)
+      res.json({
+        success: true,
+        order: {
+          order_id: order.order_id,
+          order_number: order.order_number,
+          customer_name: order.customer_name,
+          service: order.service,
+          quantity: order.quantity,
+          total_price: order.total_price,
+          payment_status: order.payment_status,
+          order_status: order.order_status,
+          created_at: order.created_at,
+          updated_at: order.updated_at
+        },
+        history
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Public: Lightweight status-only endpoint for real-time polling (customer order detail page)
+  // Returns only the current order_status from DB — no auth needed but validates by order_number
+  app.get('/api/orders/:orderNumber/status', async (req: Request, res: Response) => {
+    try {
+      const orderNumber = req.params.orderNumber.trim().toUpperCase();
+      const order = await getOrderByNumber(orderNumber);
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found.' });
+      }
+      res.json({
+        success: true,
+        orderNumber: order.order_number,
+        order_status: order.order_status,
+        updated_at: order.updated_at
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Customer: Get single order detail by order_number (ownership verified)
+  app.get('/api/customer/orders/:orderNumber', authenticateCustomer, async (req: AuthRequest, res: Response) => {
+    try {
+      const orderNumber = req.params.orderNumber;
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+      const host = req.headers.host;
+      const baseUrl = process.env.BASE_URL || `${protocol}://${host}`;
+
+      const order = await getOrderByNumber(orderNumber);
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found.' });
+      }
+
+      // Ownership check: must be logged-in customer's order
+      const isOwner = (req.user.id && String(order.customer_id) === String(req.user.id)) ||
+                      (req.user.phone && order.customer_phone === req.user.phone);
+      if (!isOwner) {
+        return res.status(403).json({ success: false, message: 'You do not have permission to view this order.' });
+      }
+
+      const history = await getOrderStatusHistory(order.order_id);
+      order.documents = (order.documents || []).map((doc: any) => ({
+        ...doc,
+        downloadUrl: `${baseUrl}/api/documents/download/${doc.download_token || doc.downloadToken}`
+      }));
+
+      res.json({ success: true, order, history });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  });
+
+  // Order Status History (customer - own orders, or admin)
+  app.get('/api/orders/:orderNumber/status-history', async (req: AuthRequest, res: Response) => {
+    try {
+      const orderNumber = req.params.orderNumber;
+      // Try to get order (lookup by number)
+      const order = await getOrderByNumber(orderNumber);
+      if (!order) {
+        return res.status(404).json({ success: false, message: 'Order not found.' });
+      }
+      const history = await getOrderStatusHistory(order.order_id);
+      res.json({ success: true, history });
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
     }

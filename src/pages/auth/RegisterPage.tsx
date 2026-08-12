@@ -17,11 +17,13 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ info, onLoginSuccess
   const [confirmPassword, setConfirmPassword] = useState('');
 
   const [error, setError] = useState<string | null>(null);
+  const [isDuplicateAccount, setIsDuplicateAccount] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setIsDuplicateAccount(false);
 
     // Client-side Validation
     if (!name.trim()) {
@@ -76,7 +78,12 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ info, onLoginSuccess
         const target = redirectPath || '/customer/dashboard';
         navigate(target);
       } else {
-        setError(data.message || 'Registration failed. Please check your details.');
+        if (data.code === 'ACCOUNT_EXISTS' || (data.message && data.message.toLowerCase().includes('already exists'))) {
+          setIsDuplicateAccount(true);
+          setError('An account already exists with this mobile number. Please login instead.');
+        } else {
+          setError(data.message || 'Registration failed. Please check your details.');
+        }
       }
     } catch (err: any) {
       setError('Network error. Please check your internet connection and try again.');
@@ -194,9 +201,23 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ info, onLoginSuccess
             </div>
 
             {error && (
-              <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-semibold flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-                <span>{error}</span>
+              <div className="p-4 bg-amber-50 border border-amber-300 text-amber-950 rounded-xl text-xs space-y-2.5 shadow-sm">
+                <div className="flex items-center space-x-2 font-bold">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                  <span>{error}</span>
+                </div>
+                {isDuplicateAccount && (
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => navigate(redirectPath ? `/login?redirect=${encodeURIComponent(redirectPath)}` : '/login')}
+                      className="px-4 py-2 bg-blue-900 hover:bg-blue-800 text-white font-bold rounded-lg text-xs shadow-sm transition-all flex items-center space-x-1.5 cursor-pointer"
+                    >
+                      <span>Go to Login</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

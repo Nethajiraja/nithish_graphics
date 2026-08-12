@@ -188,7 +188,7 @@ export async function initDatabase() {
         CREATE TABLE IF NOT EXISTS users (
           id SERIAL PRIMARY KEY,
           name VARCHAR(255) NOT NULL,
-          email VARCHAR(255) UNIQUE NOT NULL,
+          email VARCHAR(255),
           phone VARCHAR(50),
           password_hash VARCHAR(255),
           role VARCHAR(50) DEFAULT 'CUSTOMER',
@@ -202,10 +202,30 @@ export async function initDatabase() {
         );
       `);
 
+      await pool.query(`ALTER TABLE users ALTER COLUMN email DROP NOT NULL;`);
+      await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255) UNIQUE;`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(50) DEFAULT 'LOCAL';`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image_url TEXT;`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;`);
+
+      // Ensure unique index on phone number (for non-empty phone values)
+      await pool.query(`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'users' AND indexname = 'idx_users_phone_unique') THEN
+            CREATE UNIQUE INDEX idx_users_phone_unique ON users(phone) WHERE phone IS NOT NULL AND phone != '';
+          END IF;
+        END $$;
+      `);
+
+      // Ensure unique index on email (for non-null email values)
+      await pool.query(`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'users' AND indexname = 'idx_users_email_unique') THEN
+            CREATE UNIQUE INDEX idx_users_email_unique ON users(email) WHERE email IS NOT NULL AND email != '';
+          END IF;
+        END $$;
+      `);
 
       // 1. Orders table
       await pool.query(`
@@ -232,6 +252,34 @@ export async function initDatabase() {
       `);
 
       await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id INTEGER REFERENCES users(id) ON DELETE SET NULL;`);
+      await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(30);`);
+
+      // Create unique index on order_number only if it doesn't exist
+      await pool.query(`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'orders' AND indexname = 'idx_orders_order_number') THEN
+            CREATE UNIQUE INDEX idx_orders_order_number ON orders(order_number) WHERE order_number IS NOT NULL;
+          END IF;
+        END $$;
+      `);
+
+      // Add performance indexes
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_customer_phone ON orders(customer_phone);`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_order_status ON orders(order_status);`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);`);
+
+      // 7. Order Status History table
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS order_status_history (
+          id SERIAL PRIMARY KEY,
+          order_id VARCHAR(50) REFERENCES orders(order_id) ON DELETE CASCADE,
+          previous_status VARCHAR(50),
+          new_status VARCHAR(50) NOT NULL,
+          changed_by VARCHAR(255) DEFAULT 'Admin',
+          changed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_osh_order_id ON order_status_history(order_id);`);
 
       // 2. Order documents table
       await pool.query(`
@@ -484,6 +532,30 @@ export async function deletePricingRate(id: string): Promise<boolean> {
   return true;
 }
 
+// Generate human-readable order number: NG-YYYY-NNNNN
+export async function generateOrderNumber(): Promise<string> {
+  const year = new Date().getFullYear();
+  if (pool) {
+    try {
+      const res = await pool.query(
+        `SELECT COUNT(*) as cnt FROM orders WHERE order_number LIKE $1`,
+        [`NG-${year}-%`]
+      );
+      const seq = parseInt(res.rows[0].cnt) + 1;
+      return `NG-${year}-${String(seq).padStart(5, '0')}`;
+    } catch (err) {
+      // Fallback: use timestamp-based seq
+      const seq = Date.now() % 100000;
+      return `NG-${year}-${String(seq).padStart(5, '0')}`;
+    }
+  }
+  // JSON fallback
+  const orders = readJsonFile(ORDERS_FILE, []);
+  const yearOrders = orders.filter((o: any) => (o.order_number || '').startsWith(`NG-${year}-`));
+  const seq = yearOrders.length + 1;
+  return `NG-${year}-${String(seq).padStart(5, '0')}`;
+}
+
 export async function createOrder(orderData: any, documents: any[]): Promise<any> {
   if (pool) {
     const client = await pool.connect();
@@ -491,17 +563,20 @@ export async function createOrder(orderData: any, documents: any[]): Promise<any
       await client.query('BEGIN');
       const orderRes = await client.query(
         `INSERT INTO orders (
-          order_id, customer_id, customer_name, customer_phone, service, quantity, pages_per_copy,
+          order_id, order_number, customer_id, customer_name, customer_phone, service, quantity, pages_per_copy,
           color_type, paper_size, paper_gsm, print_side, binding_type,
           additional_instructions, total_price, payment_status, order_status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         RETURNING *`,
         [
-          orderData.orderId, orderData.customerId || null, orderData.customerName, orderData.customerPhone, orderData.service,
+          orderData.orderId, orderData.orderNumber || null, orderData.customerId || null,
+          orderData.customerName, orderData.customerPhone, orderData.service,
           orderData.quantity || 1, orderData.pagesPerCopy || 1, orderData.colorType,
           orderData.paperSize || 'A4', orderData.paperGsm || '70gsm', orderData.printSide,
           orderData.bindingType, orderData.additionalInstructions || '', orderData.totalPrice,
-          orderData.paymentStatus || 'Unpaid', orderData.orderStatus || 'Pending'
+          orderData.paymentStatus || 'Unpaid',
+          // Always store order_status as lowercase for consistency
+          (orderData.orderStatus || 'pending').toLowerCase()
         ]
       );
 
@@ -535,6 +610,7 @@ export async function createOrder(orderData: any, documents: any[]): Promise<any
 
   const newOrder = {
     order_id: orderData.orderId,
+    order_number: orderData.orderNumber || null,
     customer_id: orderData.customerId || null,
     customer_name: orderData.customerName,
     customer_phone: orderData.customerPhone,
@@ -549,7 +625,7 @@ export async function createOrder(orderData: any, documents: any[]): Promise<any
     additional_instructions: orderData.additionalInstructions || '',
     total_price: orderData.totalPrice,
     payment_status: orderData.paymentStatus || 'Unpaid',
-    order_status: orderData.orderStatus || 'Pending',
+    order_status: (orderData.orderStatus || 'pending').toLowerCase(),
     created_at: new Date().toISOString()
   };
 
@@ -608,8 +684,10 @@ export async function getAllOrders(): Promise<any[]> {
 
 export async function updateOrderStatus(orderId: string, orderStatus: string, paymentStatus?: string): Promise<any> {
   if (pool) {
+    // Normalize status to lowercase — single source of truth
+    const statusNormalized = orderStatus.toLowerCase().trim();
     let query = `UPDATE orders SET order_status = $1, updated_at = CURRENT_TIMESTAMP`;
-    const params: any[] = [orderStatus];
+    const params: any[] = [statusNormalized];
     if (paymentStatus) {
       query += `, payment_status = $2`;
       params.push(paymentStatus);
@@ -624,11 +702,254 @@ export async function updateOrderStatus(orderId: string, orderStatus: string, pa
   const orders = readJsonFile(ORDERS_FILE, []);
   const order = orders.find((o: any) => o.order_id === orderId);
   if (order) {
-    order.order_status = orderStatus;
+    order.order_status = orderStatus.toLowerCase().trim();
     if (paymentStatus) order.payment_status = paymentStatus;
     writeJsonFile(ORDERS_FILE, orders);
   }
   return order;
+}
+
+// Record status change in history
+export async function recordStatusChange(
+  orderId: string,
+  previousStatus: string | null,
+  newStatus: string,
+  changedBy: string = 'Admin'
+): Promise<void> {
+  if (pool) {
+    await pool.query(
+      `INSERT INTO order_status_history (order_id, previous_status, new_status, changed_by) VALUES ($1, $2, $3, $4)`,
+      [orderId, previousStatus, newStatus, changedBy]
+    );
+    return;
+  }
+  // JSON fallback
+  const STATUS_HISTORY_FILE = path.join(FALLBACK_DIR, 'status_history.json');
+  const history = readJsonFile(STATUS_HISTORY_FILE, []);
+  history.push({
+    id: Date.now(),
+    order_id: orderId,
+    previous_status: previousStatus,
+    new_status: newStatus,
+    changed_by: changedBy,
+    changed_at: new Date().toISOString()
+  });
+  writeJsonFile(STATUS_HISTORY_FILE, history);
+}
+
+// Get status change history for an order
+export async function getOrderStatusHistory(orderId: string): Promise<any[]> {
+  if (pool) {
+    const res = await pool.query(
+      `SELECT * FROM order_status_history WHERE order_id = $1 ORDER BY changed_at ASC`,
+      [orderId]
+    );
+    return res.rows;
+  }
+  const STATUS_HISTORY_FILE = path.join(FALLBACK_DIR, 'status_history.json');
+  const history = readJsonFile(STATUS_HISTORY_FILE, []);
+  return history.filter((h: any) => h.order_id === orderId).sort((a: any, b: any) => new Date(a.changed_at).getTime() - new Date(b.changed_at).getTime());
+}
+
+// Track order by order_number + phone (public - no auth)
+export async function trackOrderByNumberAndPhone(orderNumber: string, phone: string): Promise<any | null> {
+  const cleanPhone = phone.replace(/[^0-9]/g, '').trim();
+  if (pool) {
+    const res = await pool.query(
+      `SELECT o.*, array_agg(row_to_json(d)) FILTER (WHERE d.document_id IS NOT NULL) as documents
+       FROM orders o
+       LEFT JOIN order_documents d ON d.order_id = o.order_id
+       WHERE o.order_number = $1 AND (o.customer_phone = $2 OR o.customer_phone = $3)
+       GROUP BY o.order_id`,
+      [orderNumber, cleanPhone, phone.trim()]
+    );
+    return res.rows[0] || null;
+  }
+  const orders = readJsonFile(ORDERS_FILE, []);
+  const allDocs = readJsonFile(DOCUMENTS_FILE, []);
+  const order = orders.find((o: any) =>
+    o.order_number === orderNumber &&
+    (o.customer_phone === cleanPhone || o.customer_phone === phone.trim() ||
+     (o.customer_phone || '').replace(/[^0-9]/g, '') === cleanPhone)
+  );
+  if (!order) return null;
+  order.documents = allDocs.filter((d: any) => d.order_id === order.order_id);
+  return order;
+}
+
+// Get single order by order_number (for customer detail page - needs ownership check in route)
+export async function getOrderByNumber(orderNumber: string): Promise<any | null> {
+  if (pool) {
+    const res = await pool.query(
+      `SELECT o.*, array_agg(row_to_json(d)) FILTER (WHERE d.document_id IS NOT NULL) as documents
+       FROM orders o
+       LEFT JOIN order_documents d ON d.order_id = o.order_id
+       WHERE o.order_number = $1
+       GROUP BY o.order_id`,
+      [orderNumber]
+    );
+    return res.rows[0] || null;
+  }
+  const orders = readJsonFile(ORDERS_FILE, []);
+  const allDocs = readJsonFile(DOCUMENTS_FILE, []);
+  const order = orders.find((o: any) => o.order_number === orderNumber);
+  if (!order) return null;
+  order.documents = allDocs.filter((d: any) => d.order_id === order.order_id);
+  return order;
+}
+
+// Get single order by order_id (internal DB id) with documents
+export async function getOrderById(orderId: string): Promise<any | null> {
+  if (pool) {
+    const res = await pool.query(
+      `SELECT o.*, array_agg(row_to_json(d)) FILTER (WHERE d.document_id IS NOT NULL) as documents
+       FROM orders o
+       LEFT JOIN order_documents d ON d.order_id = o.order_id
+       WHERE o.order_id = $1
+       GROUP BY o.order_id`,
+      [orderId]
+    );
+    return res.rows[0] || null;
+  }
+  const orders = readJsonFile(ORDERS_FILE, []);
+  const allDocs = readJsonFile(DOCUMENTS_FILE, []);
+  const order = orders.find((o: any) => o.order_id === orderId);
+  if (!order) return null;
+  order.documents = allDocs.filter((d: any) => d.order_id === orderId);
+  return order;
+}
+
+// Admin: filtered orders with backend search + status filter + pagination
+export async function getAdminOrdersFiltered({
+  search = '',
+  status = 'all',
+  page = 1,
+  limit = 50
+}: { search?: string; status?: string; page?: number; limit?: number } = {}): Promise<{ orders: any[]; total: number }> {
+  const offset = (page - 1) * limit;
+  const searchTerm = search.trim();
+  const statusFilter = status !== 'all' ? status : null;
+
+  if (pool) {
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (searchTerm) {
+      params.push(`%${searchTerm}%`);
+      conditions.push(`(
+        o.order_number ILIKE $${params.length}
+        OR o.order_id ILIKE $${params.length}
+        OR o.customer_name ILIKE $${params.length}
+        OR o.customer_phone ILIKE $${params.length}
+        OR u.email ILIKE $${params.length}
+      )`);
+    }
+
+    if (statusFilter) {
+      params.push(statusFilter);
+      conditions.push(`LOWER(o.order_status) = LOWER($${params.length})`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countRes = await pool.query(
+      `SELECT COUNT(*) FROM orders o LEFT JOIN users u ON u.id = o.customer_id ${whereClause}`,
+      params
+    );
+    const total = parseInt(countRes.rows[0].count);
+
+    params.push(limit, offset);
+    const ordersRes = await pool.query(
+      `SELECT o.*, u.email as customer_email,
+              array_agg(row_to_json(d)) FILTER (WHERE d.document_id IS NOT NULL) as documents
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.customer_id
+       LEFT JOIN order_documents d ON d.order_id = o.order_id
+       ${whereClause}
+       GROUP BY o.order_id, u.email
+       ORDER BY o.created_at DESC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    return { orders: ordersRes.rows, total };
+  }
+
+  // JSON fallback
+  let orders = readJsonFile(ORDERS_FILE, []);
+  const allDocs = readJsonFile(DOCUMENTS_FILE, []);
+
+  if (searchTerm) {
+    const q = searchTerm.toLowerCase();
+    orders = orders.filter((o: any) =>
+      (o.order_number || '').toLowerCase().includes(q) ||
+      (o.order_id || '').toLowerCase().includes(q) ||
+      (o.customer_name || '').toLowerCase().includes(q) ||
+      (o.customer_phone || '').includes(q)
+    );
+  }
+  if (statusFilter) {
+    orders = orders.filter((o: any) => (o.order_status || '').toLowerCase() === statusFilter.toLowerCase());
+  }
+
+  const total = orders.length;
+  orders = orders.slice(offset, offset + limit);
+
+  const docsByOrder: Record<string, any[]> = {};
+  allDocs.forEach((doc: any) => {
+    if (!docsByOrder[doc.order_id]) docsByOrder[doc.order_id] = [];
+    docsByOrder[doc.order_id].push(doc);
+  });
+
+  return {
+    orders: orders.map((o: any) => ({ ...o, documents: docsByOrder[o.order_id] || [] })),
+    total
+  };
+}
+
+// Admin dashboard statistics from DB
+export async function getDashboardStats(): Promise<any> {
+  if (pool) {
+    const res = await pool.query(`
+      SELECT
+        COUNT(*) as total_orders,
+        COUNT(*) FILTER (WHERE LOWER(order_status) = 'pending') as pending_count,
+        COUNT(*) FILTER (WHERE LOWER(order_status) = 'confirmed') as confirmed_count,
+        COUNT(*) FILTER (WHERE LOWER(order_status) = 'printing') as printing_count,
+        COUNT(*) FILTER (WHERE LOWER(order_status) = 'ready') as ready_count,
+        COUNT(*) FILTER (WHERE LOWER(order_status) = 'completed') as completed_count,
+        COUNT(*) FILTER (WHERE LOWER(order_status) = 'cancelled') as cancelled_count,
+        COUNT(*) FILTER (WHERE LOWER(order_status) IN ('pending')) as new_orders_count,
+        COALESCE(SUM(total_price) FILTER (WHERE LOWER(order_status) IN ('completed', 'ready')), 0) as total_revenue
+      FROM orders
+    `);
+    const r = res.rows[0];
+    return {
+      totalOrders: parseInt(r.total_orders),
+      pendingCount: parseInt(r.pending_count),
+      confirmedCount: parseInt(r.confirmed_count),
+      printingCount: parseInt(r.printing_count),
+      readyCount: parseInt(r.ready_count),
+      completedCount: parseInt(r.completed_count),
+      cancelledCount: parseInt(r.cancelled_count),
+      newOrdersCount: parseInt(r.new_orders_count),
+      totalRevenue: parseFloat(r.total_revenue)
+    };
+  }
+  // JSON fallback
+  const orders = readJsonFile(ORDERS_FILE, []);
+  const byStatus = (s: string) => orders.filter((o: any) => (o.order_status || '').toLowerCase() === s).length;
+  return {
+    totalOrders: orders.length,
+    pendingCount: byStatus('pending'),
+    confirmedCount: byStatus('confirmed'),
+    printingCount: byStatus('printing'),
+    readyCount: byStatus('ready'),
+    completedCount: byStatus('completed'),
+    cancelledCount: byStatus('cancelled'),
+    newOrdersCount: byStatus('pending'),
+    totalRevenue: orders.filter((o: any) => ['completed', 'ready'].includes((o.order_status || '').toLowerCase())).reduce((s: number, o: any) => s + Number(o.total_price || 0), 0)
+  };
 }
 
 export async function getDocumentByToken(token: string): Promise<any | null> {
@@ -651,31 +972,79 @@ export async function getAdminByEmail(email: string): Promise<any | null> {
 
 // User & Customer Management Helper Functions
 
+export function normalizePhoneNumber(phone: string): string {
+  const digits = (phone || '').replace(/[^0-9]/g, '').trim();
+  if (digits.length >= 10) {
+    return digits.slice(-10);
+  }
+  return digits;
+}
+
+export async function linkOrdersToCustomer(userId: number | string, phone: string): Promise<void> {
+  const raw = (phone || '').trim();
+  const digits = raw.replace(/[^0-9]/g, '');
+  const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+
+  if (!digits && !raw) return;
+
+  if (pool) {
+    await pool.query(
+      `UPDATE orders
+       SET customer_id = $1
+       WHERE customer_id IS NULL
+         AND (customer_phone = $2 OR customer_phone = $3 OR ($4 != '' AND LENGTH(customer_phone) >= 10 AND RIGHT(customer_phone, 10) = $4))`,
+      [userId, raw, digits, last10]
+    );
+    return;
+  }
+  const orders = readJsonFile(ORDERS_FILE, []);
+  let updated = false;
+  orders.forEach((o: any) => {
+    if (!o.customer_id && o.customer_phone) {
+      const oRaw = String(o.customer_phone).trim();
+      const oDigits = oRaw.replace(/[^0-9]/g, '');
+      const oLast10 = oDigits.length >= 10 ? oDigits.slice(-10) : oDigits;
+
+      if (oRaw === raw || oDigits === digits || (last10 && oLast10 === last10)) {
+        o.customer_id = userId;
+        updated = true;
+      }
+    }
+  });
+  if (updated) writeJsonFile(ORDERS_FILE, orders);
+}
+
 export async function createUser(userData: {
   name: string;
-  email: string;
+  email?: string;
   phone: string;
   passwordHash: string;
   role?: string;
 }): Promise<any> {
-  const role = userData.role || 'CUSTOMER';
+  const role = 'CUSTOMER';
+  const cleanEmail = userData.email && userData.email.trim() ? userData.email.trim().toLowerCase() : null;
+  const cleanPhone = normalizePhoneNumber(userData.phone) || userData.phone.trim();
 
   if (pool) {
     const res = await pool.query(
       `INSERT INTO users (name, email, phone, password_hash, role)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, name, email, phone, role, is_active, created_at`,
-      [userData.name, userData.email.toLowerCase(), userData.phone, userData.passwordHash, role]
+      [userData.name.trim(), cleanEmail, cleanPhone, userData.passwordHash, role]
     );
-    return res.rows[0];
+    const createdUser = res.rows[0];
+    if (createdUser && cleanPhone) {
+      await linkOrdersToCustomer(createdUser.id, cleanPhone);
+    }
+    return createdUser;
   }
 
   const users = readJsonFile(USERS_FILE, []);
   const newUser = {
     id: users.length > 0 ? Math.max(...users.map((u: any) => Number(u.id) || 0)) + 1 : 1,
-    name: userData.name,
-    email: userData.email.toLowerCase(),
-    phone: userData.phone,
+    name: userData.name.trim(),
+    email: cleanEmail || '',
+    phone: cleanPhone,
     password_hash: userData.passwordHash,
     role,
     is_active: true,
@@ -685,38 +1054,73 @@ export async function createUser(userData: {
   users.push(newUser);
   writeJsonFile(USERS_FILE, users);
 
+  if (cleanPhone) {
+    await linkOrdersToCustomer(newUser.id, cleanPhone);
+  }
+
   const { password_hash, ...safeUser } = newUser;
   return safeUser;
 }
 
 export async function findUserByIdentifier(identifier: string): Promise<any | null> {
   const term = identifier.trim().toLowerCase();
+  const digits = identifier.replace(/[^0-9]/g, '').trim();
+  const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
 
   if (pool) {
     const res = await pool.query(
-      `SELECT * FROM users WHERE LOWER(email) = $1 OR phone = $2 LIMIT 1`,
-      [term, identifier.trim()]
+      `SELECT * FROM users
+       WHERE (email IS NOT NULL AND LOWER(email) = $1)
+          OR phone = $2
+          OR ($3 != '' AND phone = $3)
+          OR ($4 != '' AND LENGTH(phone) >= 10 AND RIGHT(phone, 10) = $4)
+       LIMIT 1`,
+      [term, identifier.trim(), digits, last10]
     );
     return res.rows[0] || null;
   }
 
   const users = readJsonFile(USERS_FILE, []);
-  return users.find((u: any) => u.email.toLowerCase() === term || u.phone === identifier.trim()) || null;
+  return users.find((u: any) => {
+    if (u.email && u.email.toLowerCase() === term) return true;
+    if (!u.phone) return false;
+    const uRaw = String(u.phone).trim();
+    const uDigits = uRaw.replace(/[^0-9]/g, '');
+    const uLast10 = uDigits.length >= 10 ? uDigits.slice(-10) : uDigits;
+
+    return uRaw === identifier.trim() || uDigits === digits || (last10 && uLast10 === last10);
+  }) || null;
 }
 
 export async function findUserByPhone(phone: string): Promise<any | null> {
-  const cleanPhone = phone.replace(/[^0-9]/g, '').trim();
+  const raw = (phone || '').trim();
+  const digits = raw.replace(/[^0-9]/g, '');
+  const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+
+  if (!digits && !raw) return null;
 
   if (pool) {
     const res = await pool.query(
-      `SELECT * FROM users WHERE phone = $1 OR phone = $2 LIMIT 1`,
-      [cleanPhone, phone.trim()]
+      `SELECT * FROM users
+       WHERE phone = $1
+          OR phone = $2
+          OR ($3 != '' AND phone = $3)
+          OR ($3 != '' AND LENGTH(phone) >= 10 AND RIGHT(phone, 10) = $3)
+       LIMIT 1`,
+      [raw, digits, last10]
     );
     return res.rows[0] || null;
   }
 
   const users = readJsonFile(USERS_FILE, []);
-  return users.find((u: any) => u.phone && (u.phone === phone.trim() || u.phone.replace(/[^0-9]/g, '') === cleanPhone)) || null;
+  return users.find((u: any) => {
+    if (!u.phone) return false;
+    const uRaw = String(u.phone).trim();
+    const uDigits = uRaw.replace(/[^0-9]/g, '');
+    const uLast10 = uDigits.length >= 10 ? uDigits.slice(-10) : uDigits;
+
+    return uRaw === raw || uDigits === digits || (last10 && uLast10 === last10);
+  }) || null;
 }
 
 export async function findUserById(id: number | string): Promise<any | null> {
@@ -835,10 +1239,28 @@ export async function toggleCustomerActive(id: number | string, isActive: boolea
 }
 
 export async function getOrdersForCustomer(user: { id?: number | string; phone?: string; email?: string }): Promise<any[]> {
+  const userId = user.id ? Number(user.id) || user.id : null;
+  const rawPhone = (user.phone || '').trim();
+  const cleanPhone = rawPhone.replace(/[^0-9]/g, '');
+
+  if (pool && (userId || rawPhone)) {
+    const res = await pool.query(
+      `SELECT o.*, array_agg(row_to_json(d)) FILTER (WHERE d.document_id IS NOT NULL) as documents
+       FROM orders o
+       LEFT JOIN order_documents d ON d.order_id = o.order_id
+       WHERE (o.customer_id = $1 AND $1 IS NOT NULL)
+          OR ($2 != '' AND (o.customer_phone = $2 OR o.customer_phone = $3))
+       GROUP BY o.order_id
+       ORDER BY o.created_at DESC`,
+      [userId, cleanPhone, rawPhone]
+    );
+    return res.rows;
+  }
+
   const allOrders = await getAllOrders();
   return allOrders.filter((o: any) => {
-    if (user.id && String(o.customer_id) === String(user.id)) return true;
-    if (user.phone && o.customer_phone === user.phone) return true;
+    if (userId && String(o.customer_id) === String(userId)) return true;
+    if (rawPhone && (o.customer_phone === rawPhone || (o.customer_phone || '').replace(/[^0-9]/g, '') === cleanPhone)) return true;
     return false;
   });
 }

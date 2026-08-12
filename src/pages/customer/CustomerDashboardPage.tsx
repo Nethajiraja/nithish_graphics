@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, ShoppingBag, Clock, CheckCircle2, AlertCircle, FileText, Download, Lock, LogOut, Plus, ShieldCheck, RefreshCw, KeyRound, Save } from 'lucide-react';
 import { BusinessInfo, CustomerUser, OrderItem } from '../../types';
 
@@ -62,8 +62,17 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
       .finally(() => setIsLoadingOrders(false));
   };
 
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   useEffect(() => {
     fetchCustomerOrders();
+    // Poll every 30 seconds to keep order statuses current
+    pollingRef.current = setInterval(() => {
+      fetchCustomerOrders();
+    }, 30000);
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
   }, [token]);
 
   const handleProfileSubmit = async (e: React.FormEvent) => {
@@ -200,7 +209,7 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
         <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-6 shadow-md space-y-3 animate-in fade-in">
           <div className="flex items-center space-x-2 text-amber-950 font-bold text-xs sm:text-sm">
             <AlertCircle className="w-5 h-5 text-orange-600 shrink-0" />
-            <span>Please add your 10-digit mobile number to complete your profile and place print orders:</span>
+            <span>Please add your mobile number to complete your customer profile.</span>
           </div>
           <form onSubmit={handleMobileSubmit} className="flex flex-col sm:flex-row items-center gap-3">
             <input
@@ -320,33 +329,55 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
                     <tr className="bg-slate-50 text-slate-700 font-bold uppercase text-[11px] border-b border-slate-200">
                       <th className="p-3">Order ID</th>
                       <th className="p-3">Service</th>
-                      <th className="p-3">Total Amount</th>
+                      <th className="p-3">Amount</th>
                       <th className="p-3">Status</th>
-                      <th className="p-3 text-right">Date</th>
+                      <th className="p-3">Date</th>
+                      <th className="p-3 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {orders.slice(0, 5).map(ord => {
                       const orderId = ord.order_id || ord.id;
+                      const orderNum = ord.order_number || orderId;
                       const status = (ord.order_status || ord.status || 'Pending').toLowerCase();
                       return (
                         <tr key={orderId} className="hover:bg-slate-50">
-                          <td className="p-3 font-mono font-bold text-slate-900">#{orderId}</td>
+                          <td className="p-3 font-mono font-bold text-slate-900 text-xs">{orderNum}</td>
                           <td className="p-3 font-semibold text-slate-800">{ord.service || ord.serviceType}</td>
                           <td className="p-3 font-bold text-blue-900">₹{ord.total_price || ord.totalAmount}</td>
                           <td className="p-3">
-                            <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold capitalize ${
-                              status === 'pending' ? 'bg-amber-100 text-amber-900' :
-                              status === 'confirmed' ? 'bg-blue-100 text-blue-900' :
-                              status === 'printing' ? 'bg-indigo-100 text-indigo-900' :
-                              status === 'ready' ? 'bg-emerald-100 text-emerald-900' :
-                              status === 'completed' ? 'bg-slate-900 text-white' :
-                              'bg-red-100 text-red-900'
+                            <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold capitalize border ${
+                              status === 'pending' ? 'bg-amber-100 text-amber-900 border-amber-300' :
+                              status === 'confirmed' ? 'bg-blue-100 text-blue-900 border-blue-300' :
+                              status === 'printing' ? 'bg-indigo-100 text-indigo-900 border-indigo-300' :
+                              status === 'ready' ? 'bg-emerald-100 text-emerald-900 border-emerald-300' :
+                              status === 'completed' ? 'bg-slate-900 text-white border-slate-700' :
+                              'bg-red-100 text-red-900 border-red-300'
                             }`}>
                               {status}
                             </span>
                           </td>
-                          <td className="p-3 text-right text-slate-500">{new Date(ord.created_at || ord.createdAt || '').toLocaleDateString()}</td>
+                          <td className="p-3 text-slate-500">{new Date(ord.created_at || ord.createdAt || '').toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</td>
+                          <td className="p-3 text-right">
+                            <div className="flex items-center justify-end space-x-1">
+                              {ord.order_number && (
+                                <button
+                                  onClick={() => navigate(`/customer/orders/${ord.order_number}`)}
+                                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold"
+                                >
+                                  View
+                                </button>
+                              )}
+                              {ord.order_number && (
+                                <button
+                                  onClick={() => navigate(`/track-order?orderNumber=${ord.order_number}&phone=${user.phone || ''}`)}
+                                  className="px-2.5 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-lg text-[10px] font-bold"
+                                >
+                                  Track
+                                </button>
+                              )}
+                            </div>
+                          </td>
                         </tr>
                       );
                     })}
@@ -395,6 +426,7 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
             <div className="space-y-4">
               {orders.map(ord => {
                 const orderId = ord.order_id || ord.id;
+                const orderNum = ord.order_number || orderId;
                 const status = (ord.order_status || ord.status || 'Pending').toLowerCase();
                 const docs = ord.documents || [];
 
@@ -403,18 +435,18 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200/80 pb-3">
                       <div>
                         <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Order ID:</span>
-                        <span className="text-sm font-extrabold text-slate-900 ml-2 font-mono">#{orderId}</span>
-                        <span className="text-xs text-slate-400 ml-3">{new Date(ord.created_at || ord.createdAt || '').toLocaleString()}</span>
+                        <span className="text-sm font-extrabold text-orange-700 ml-2 font-mono">{orderNum}</span>
+                        <span className="text-xs text-slate-400 ml-3">{new Date(ord.created_at || ord.createdAt || '').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                       </div>
                       <div className="flex items-center space-x-2">
                         <span className="text-xs font-bold text-slate-500">Status:</span>
-                        <span className={`px-3 py-1 rounded-full text-xs font-bold capitalize ${
-                          status === 'pending' ? 'bg-amber-100 text-amber-900 border border-amber-300' :
-                          status === 'confirmed' ? 'bg-blue-100 text-blue-900 border border-blue-300' :
-                          status === 'printing' ? 'bg-indigo-100 text-indigo-900 border border-indigo-300' :
-                          status === 'ready' ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' :
-                          status === 'completed' ? 'bg-slate-900 text-white' :
-                          'bg-red-100 text-red-900 border border-red-300'
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold capitalize border ${
+                          status === 'pending' ? 'bg-amber-100 text-amber-900 border-amber-300' :
+                          status === 'confirmed' ? 'bg-blue-100 text-blue-900 border-blue-300' :
+                          status === 'printing' ? 'bg-indigo-100 text-indigo-900 border-indigo-300' :
+                          status === 'ready' ? 'bg-emerald-100 text-emerald-900 border-emerald-300' :
+                          status === 'completed' ? 'bg-slate-900 text-white border-slate-700' :
+                          'bg-red-100 text-red-900 border-red-300'
                         }`}>
                           {status}
                         </span>
@@ -436,12 +468,12 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
                       </div>
 
                       <div>
-                        <span className="font-bold block text-slate-900 mb-1">Attached Documents ({docs.length})</span>
+                        <span className="font-bold block text-slate-900 mb-1">Documents ({docs.length})</span>
                         {docs.length === 0 ? (
-                          <span className="text-slate-400 italic">No files</span>
+                          <span className="text-slate-400 italic">No files uploaded</span>
                         ) : (
                           <div className="space-y-1">
-                            {docs.map((doc, dIdx) => (
+                            {docs.slice(0, 2).map((doc, dIdx) => (
                               <a
                                 key={dIdx}
                                 href={doc.downloadUrl || `/api/documents/download/${doc.download_token}`}
@@ -453,9 +485,38 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
                                 <span className="truncate">{doc.original_filename}</span>
                               </a>
                             ))}
+                            {docs.length > 2 && <p className="text-[10px] text-slate-400">+{docs.length - 2} more files</p>}
                           </div>
                         )}
                       </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
+                      {ord.order_number && (
+                        <button
+                          onClick={() => navigate(`/customer/orders/${ord.order_number}`)}
+                          className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all"
+                        >
+                          View Order Details
+                        </button>
+                      )}
+                      {ord.order_number && (
+                        <button
+                          onClick={() => navigate(`/track-order?orderNumber=${ord.order_number}&phone=${user.phone || ''}`)}
+                          className="px-4 py-2 bg-orange-100 hover:bg-orange-200 text-orange-700 border border-orange-300 rounded-xl text-xs font-bold transition-all"
+                        >
+                          Track Order
+                        </button>
+                      )}
+                      {!ord.order_number && (
+                        <button
+                          onClick={() => navigate('/track-order')}
+                          className="px-4 py-2 bg-orange-100 text-orange-700 border border-orange-300 rounded-xl text-xs font-bold"
+                        >
+                          Track by Order ID
+                        </button>
+                      )}
                     </div>
                   </div>
                 );

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, Upload, MessageSquare, Check, FileText, Sparkles, AlertCircle, X, ShieldCheck, ExternalLink, Loader2, LogIn, Lock } from 'lucide-react';
+import { Calculator, Upload, MessageSquare, Check, FileText, Sparkles, AlertCircle, X, ShieldCheck, ExternalLink, Loader2, LogIn, Lock, Package } from 'lucide-react';
 import { BusinessInfo, PricingRate, CustomerUser } from '../types';
 
 interface PriceCalculatorProps {
@@ -615,14 +615,25 @@ export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info, customer
                 )}
               </button>
             ) : (
-              <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl space-y-3 text-xs">
+              <div className="p-5 bg-emerald-50 border-2 border-emerald-400 rounded-xl space-y-4">
                 <div className="flex items-center space-x-2 text-emerald-800 font-bold text-sm">
                   <Check className="w-5 h-5 text-emerald-600 shrink-0" />
-                  <span>Order #{orderResult.orderId} Created Successfully!</span>
+                  <span>Order Placed Successfully!</span>
                 </div>
-                <p className="text-emerald-700">
-                  Your documents are securely uploaded. Click below to open WhatsApp with your pre-filled order details & secure document download links.
+
+                {/* Order ID prominent display */}
+                <div className="bg-white border border-emerald-300 rounded-xl p-4 text-center">
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Your Order ID</p>
+                  <p className="text-2xl font-extrabold text-orange-600 font-mono tracking-wider">
+                    {orderResult.orderNumber || orderResult.orderId}
+                  </p>
+                  <p className="text-[10px] text-slate-500 mt-1">Save this ID to track your order status</p>
+                </div>
+
+                <p className="text-xs text-emerald-700">
+                  Your documents are securely uploaded. Click below to open WhatsApp with your pre-filled order details &amp; document links.
                 </p>
+
                 <a
                   href={orderResult.whatsappUrl}
                   target="_blank"
@@ -633,6 +644,28 @@ export const PriceCalculator: React.FC<PriceCalculatorProps> = ({ info, customer
                   <span>Send Order to WhatsApp Shop</span>
                   <ExternalLink className="w-3.5 h-3.5 ml-1" />
                 </a>
+
+                <div className="flex gap-2">
+                  {navigate && orderResult.orderNumber && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/track-order?orderNumber=${orderResult.orderNumber}&phone=${customerPhone}`)}
+                      className="flex-1 flex items-center justify-center space-x-1 py-2.5 px-4 bg-orange-100 hover:bg-orange-200 text-orange-700 border border-orange-300 font-bold rounded-xl text-xs transition-all"
+                    >
+                      <Package className="w-3.5 h-3.5" />
+                      <span>Track Order</span>
+                    </button>
+                  )}
+                  {navigate && orderResult.orderNumber && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/customer/orders/${orderResult.orderNumber}`)}
+                      className="flex-1 py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs transition-all"
+                    >
+                      View Details
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 

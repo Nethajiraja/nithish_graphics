@@ -14,11 +14,13 @@ import { PricingPage } from './pages/PricingPage';
 import { ContactPage } from './pages/ContactPage';
 import { AboutPage } from './pages/AboutPage';
 import { OrderPage } from './pages/OrderPage';
+import { TrackOrderPage } from './pages/TrackOrderPage';
 
 // Customer Auth & Dashboard Pages
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { CustomerDashboardPage } from './pages/customer/CustomerDashboardPage';
+import { CustomerOrderDetailPage } from './pages/customer/CustomerOrderDetailPage';
 
 // Admin Portal Pages
 import { AdminLoginPage } from './pages/admin/AdminLoginPage';
@@ -101,22 +103,43 @@ export default function App() {
     }
   }, []);
 
-  // Fetch updated customer profile on mount if token exists
+  // Verify customer authentication session against PostgreSQL database on page load
   useEffect(() => {
-    if (customerToken) {
-      fetch('/api/customer/profile', {
-        headers: { Authorization: `Bearer ${customerToken}` }
+    fetch('/api/auth/me', {
+      headers: customerToken ? { Authorization: `Bearer ${customerToken}` } : {}
+    })
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error('Unauthenticated session');
+        }
+        return res.json();
       })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success && data.user) {
-            setCustomerUser(data.user);
-            localStorage.setItem('customer_user', JSON.stringify(data.user));
+      .then((data) => {
+        if (data.success && data.user) {
+          setCustomerUser(data.user);
+          if (data.token) {
+            setCustomerToken(data.token);
+            localStorage.setItem('customer_token', data.token);
           }
-        })
-        .catch(() => {});
-    }
-  }, [customerToken]);
+          localStorage.setItem('customer_user', JSON.stringify(data.user));
+        } else {
+          // Clear invalid local state
+          localStorage.removeItem('customer_token');
+          localStorage.removeItem('customer_user');
+          setCustomerToken(null);
+          setCustomerUser(null);
+        }
+      })
+      .catch(() => {
+        // If server returns 401 or token invalid
+        if (customerToken) {
+          localStorage.removeItem('customer_token');
+          localStorage.removeItem('customer_user');
+          setCustomerToken(null);
+          setCustomerUser(null);
+        }
+      });
+  }, []);
 
   const navigate = (path: string) => {
     window.history.pushState({}, '', path);
@@ -136,11 +159,12 @@ export default function App() {
   };
 
   const handleCustomerLogout = () => {
+    fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     localStorage.removeItem('customer_token');
     localStorage.removeItem('customer_user');
     setCustomerToken(null);
     setCustomerUser(null);
-    navigate('/');
+    navigate('/login');
   };
 
   const handleAdminLogout = () => {
@@ -209,6 +233,11 @@ export default function App() {
       );
     }
 
+    // Track Order Page (Public)
+    if (currentPath === '/track-order' || currentPath.startsWith('/track-order')) {
+      return <TrackOrderPage info={storeInfo} navigate={navigate} />;
+    }
+
     // Customer Order Creation Page (Restricted to logged-in customers)
     if (currentPath === '/order') {
       if (!customerToken) {
@@ -242,6 +271,21 @@ export default function App() {
             navigate={navigate}
             redirectPath={currentPath}
             noticeMessage="Please login or create an account to access your customer dashboard."
+          />
+        );
+      }
+
+      // Customer Order Detail Page: /customer/orders/NG-YYYY-NNNNN
+      if (currentPath.match(/^\/customer\/orders\/[A-Z0-9-]+$/)) {
+        const orderNumber = currentPath.replace('/customer/orders/', '');
+        return (
+          <CustomerOrderDetailPage
+            info={storeInfo}
+            user={customerUser}
+            token={customerToken}
+            orderNumber={orderNumber}
+            navigate={navigate}
+            onLogout={handleCustomerLogout}
           />
         );
       }
