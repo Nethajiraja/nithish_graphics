@@ -77,6 +77,29 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Process Google OAuth callback URL parameters if present
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tokenParam = params.get('token');
+    const userParam = params.get('user');
+    const loginFlag = params.get('login');
+
+    if (tokenParam && userParam && loginFlag === 'google_success') {
+      try {
+        const parsedUser = JSON.parse(userParam);
+        setCustomerToken(tokenParam);
+        setCustomerUser(parsedUser);
+        localStorage.setItem('customer_token', tokenParam);
+        localStorage.setItem('customer_user', JSON.stringify(parsedUser));
+
+        window.history.replaceState({}, document.title, '/customer/dashboard');
+        setCurrentPath('/customer/dashboard');
+      } catch (e) {
+        console.error("Failed to parse Google OAuth URL callback data:", e);
+      }
+    }
+  }, []);
+
   // Fetch updated customer profile on mount if token exists
   useEffect(() => {
     if (customerToken) {

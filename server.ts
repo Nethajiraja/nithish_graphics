@@ -24,7 +24,11 @@ import {
   updateUserProfile,
   getAllCustomers,
   toggleCustomerActive,
-  getOrdersForCustomer
+  getOrdersForCustomer,
+  findUserByGoogleId,
+  createGoogleUser,
+  linkGoogleAccount,
+  updateCustomerMobile
 } from './db.js';
 
 dotenv.config();
@@ -428,6 +432,279 @@ Sitemap: ${domain}/sitemap.xml
     } catch (err: any) {
       console.error('Login error:', err);
       res.status(500).json({ success: false, message: 'Login failed due to server error.' });
+    }
+  });
+
+  // ==================== GOOGLE OAUTH 2.0 ENDPOINTS ====================
+
+  // 2a. Initiate Google OAuth Authorization Redirect
+  app.get('/api/auth/google', (req: Request, res: Response) => {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      return res.redirect(`/login?error=${encodeURIComponent('Google Client ID is not configured on server.')}`);
+    }
+
+    const host = req.get('host') || 'localhost:3000';
+    const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const defaultRedirectUri = `${protocol}://${host}/api/auth/google/callback`;
+    const redirectUri = process.env.GOOGLE_REDIRECT_URI || defaultRedirectUri;
+
+    const state = crypto.randomBytes(16).toString('hex');
+    res.cookie('oauth_state', state, { httpOnly: true, maxAge: 10 * 60 * 1000 });
+
+    const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+      `client_id=${encodeURIComponent(clientId)}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+      `&response_type=code` +
+      `&scope=${encodeURIComponent('openid email profile')}` +
+      `&state=${encodeURIComponent(state)}` +
+      `&prompt=select_account`;
+
+    res.redirect(googleAuthUrl);
+  });
+
+  // 2b. Google OAuth Callback Endpoint
+  app.get('/api/auth/google/callback', async (req: Request, res: Response) => {
+    try {
+      const { code, error } = req.query;
+
+      if (error) {
+        return res.redirect(`/login?error=${encodeURIComponent('Google login was cancelled or denied.')}`);
+      }
+
+      if (!code || typeof code !== 'string') {
+        return res.redirect(`/login?error=${encodeURIComponent('Invalid authorization code from Google.')}`);
+      }
+
+      const clientId = process.env.GOOGLE_CLIENT_ID;
+      const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        return res.redirect(`/login?error=${encodeURIComponent('Google OAuth server credentials missing.')}`);
+      }
+
+      const host = req.get('host') || 'localhost:3000';
+      const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+      const defaultRedirectUri = `${protocol}://${host}/api/auth/google/callback`;
+      const redirectUri = process.env.GOOGLE_REDIRECT_URI || defaultRedirectUri;
+
+      // Exchange code for Google Access Token
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code,
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: redirectUri,
+          grant_type: 'authorization_code'
+        })
+      });
+
+      const tokenData: any = await tokenRes.json();
+      if (!tokenRes.ok || !tokenData.access_token) {
+        console.error('Google token exchange failed:', tokenData);
+        return res.redirect(`/login?error=${encodeURIComponent(tokenData.error_description || 'Failed to authenticate code with Google.')}`);
+      }
+
+      // Fetch user profile from Google UserInfo endpoint
+      const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` }
+      });
+
+      const profile: any = await profileRes.json();
+      if (!profileRes.ok || !profile.email) {
+        return res.redirect(`/login?error=${encodeURIComponent('Failed to retrieve user email from Google.')}`);
+      }
+
+      const googleId = profile.id;
+      const email = profile.email.toLowerCase().trim();
+      const name = profile.name || profile.given_name || email.split('@')[0];
+      const picture = profile.picture || '';
+
+      // Account Linking & Registration Logic
+      let user = await findUserByGoogleId(googleId);
+
+      if (!user) {
+        const existingUser = await findUserByIdentifier(email);
+        if (existingUser) {
+          user = await linkGoogleAccount(existingUser.id, googleId, picture);
+        } else {
+          user = await createGoogleUser({
+            name,
+            email,
+            googleId,
+            profileImageUrl: picture
+          });
+        }
+      } else {
+        user = await linkGoogleAccount(user.id, googleId, picture);
+      }
+
+      if (!user || user.is_active === false) {
+        return res.redirect(`/login?error=${encodeURIComponent('Account is deactivated. Please contact store admin.')}`);
+      }
+
+      // Strict Customer Role Enforcement
+      const userRole = 'CUSTOMER';
+
+      const token = jwt.sign(
+        {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone || '',
+          role: userRole,
+          google_id: user.google_id,
+          profile_image_url: user.profile_image_url || picture
+        },
+        JWT_SECRET,
+        { expiresIn: '30d' }
+      );
+
+      res.cookie('customer_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000
+      });
+
+      const safeUserData = JSON.stringify({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone || '',
+        role: userRole,
+        google_id: user.google_id,
+        auth_provider: user.auth_provider || 'GOOGLE',
+        profile_image_url: user.profile_image_url || picture
+      });
+
+      res.redirect(`/customer/dashboard?token=${encodeURIComponent(token)}&user=${encodeURIComponent(safeUserData)}&login=google_success`);
+    } catch (err: any) {
+      console.error('Google callback error:', err);
+      res.redirect(`/login?error=${encodeURIComponent('Google login failed due to a server error.')}`);
+    }
+  });
+
+  // 2c. Google One-Tap Credential Token Verification Endpoint
+  app.post('/api/auth/google/credential', async (req: Request, res: Response) => {
+    try {
+      const { credential } = req.body;
+      if (!credential) {
+        return res.status(400).json({ success: false, message: 'Google credential token is required.' });
+      }
+
+      const tokenInfoRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`);
+      const payload: any = await tokenInfoRes.json();
+
+      if (!tokenInfoRes.ok || !payload.email) {
+        return res.status(401).json({ success: false, message: 'Invalid Google credential token.' });
+      }
+
+      const googleId = payload.sub || payload.user_id;
+      const email = payload.email.toLowerCase().trim();
+      const name = payload.name || payload.given_name || email.split('@')[0];
+      const picture = payload.picture || '';
+
+      let user = await findUserByGoogleId(googleId);
+
+      if (!user) {
+        const existingUser = await findUserByIdentifier(email);
+        if (existingUser) {
+          user = await linkGoogleAccount(existingUser.id, googleId, picture);
+        } else {
+          user = await createGoogleUser({
+            name,
+            email,
+            googleId,
+            profileImageUrl: picture
+          });
+        }
+      } else {
+        user = await linkGoogleAccount(user.id, googleId, picture);
+      }
+
+      if (!user || user.is_active === false) {
+        return res.status(403).json({ success: false, message: 'Account is deactivated. Please contact store admin.' });
+      }
+
+      const userRole = 'CUSTOMER';
+      const token = jwt.sign(
+        {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone || '',
+          role: userRole,
+          google_id: user.google_id,
+          profile_image_url: user.profile_image_url || picture
+        },
+        JWT_SECRET,
+        { expiresIn: '30d' }
+      );
+
+      res.cookie('customer_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000
+      });
+
+      const { password_hash, ...safeUser } = user;
+      safeUser.role = userRole;
+
+      res.json({
+        success: true,
+        token,
+        user: safeUser
+      });
+    } catch (err: any) {
+      console.error('Google credential verification error:', err);
+      res.status(500).json({ success: false, message: 'Google authentication failed.' });
+    }
+  });
+
+  // 2d. Update Customer Mobile Number Endpoint (for Google customers without phone number)
+  app.put('/api/customer/mobile', authenticateCustomer, async (req: AuthRequest, res: Response) => {
+    try {
+      const { phone } = req.body;
+      const cleanPhone = (phone || '').trim();
+
+      if (!cleanPhone || !/^[0-9]{10}$/.test(cleanPhone.replace(/[\s\-\+\(\)]/g, ''))) {
+        return res.status(400).json({ success: false, message: 'Please provide a valid 10-digit mobile number.' });
+      }
+
+      const updatedUser = await updateCustomerMobile(req.user.id, cleanPhone);
+      if (!updatedUser) {
+        return res.status(404).json({ success: false, message: 'Customer account not found.' });
+      }
+
+      const userRole = 'CUSTOMER';
+      const token = jwt.sign(
+        {
+          id: updatedUser.id,
+          name: updatedUser.name,
+          email: updatedUser.email,
+          phone: updatedUser.phone,
+          role: userRole,
+          google_id: updatedUser.google_id,
+          profile_image_url: updatedUser.profile_image_url
+        },
+        JWT_SECRET,
+        { expiresIn: '30d' }
+      );
+
+      const { password_hash, ...safeUser } = updatedUser;
+      safeUser.role = userRole;
+
+      res.json({
+        success: true,
+        message: 'Mobile number updated successfully.',
+        token,
+        user: safeUser
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message || 'Failed to update mobile number.' });
     }
   });
 

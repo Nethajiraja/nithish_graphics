@@ -177,14 +177,23 @@ export async function initDatabase() {
           id SERIAL PRIMARY KEY,
           name VARCHAR(255) NOT NULL,
           email VARCHAR(255) UNIQUE NOT NULL,
-          phone VARCHAR(50) NOT NULL,
-          password_hash VARCHAR(255) NOT NULL,
+          phone VARCHAR(50),
+          password_hash VARCHAR(255),
           role VARCHAR(50) DEFAULT 'CUSTOMER',
           is_active BOOLEAN DEFAULT TRUE,
+          google_id VARCHAR(255) UNIQUE,
+          auth_provider VARCHAR(50) DEFAULT 'LOCAL',
+          profile_image_url TEXT,
+          last_login_at TIMESTAMPTZ,
           created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
       `);
+
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255) UNIQUE;`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(50) DEFAULT 'LOCAL';`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image_url TEXT;`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;`);
 
       // 1. Orders table
       await pool.query(`
@@ -749,5 +758,112 @@ export async function getOrdersForCustomer(user: { id?: number | string; phone?:
     if (user.phone && o.customer_phone === user.phone) return true;
     return false;
   });
+}
+
+export async function findUserByGoogleId(googleId: string): Promise<any | null> {
+  if (pool) {
+    const res = await pool.query(
+      `SELECT id, name, email, phone, role, is_active, google_id, auth_provider, profile_image_url, created_at, last_login_at FROM users WHERE google_id = $1`,
+      [googleId]
+    );
+    return res.rows[0] || null;
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  const user = users.find((u: any) => u.google_id === googleId);
+  if (!user) return null;
+  const { password_hash, ...safeUser } = user;
+  return safeUser;
+}
+
+export async function createGoogleUser(data: { name: string; email: string; googleId: string; profileImageUrl?: string; phone?: string }): Promise<any> {
+  const emailClean = data.email.trim().toLowerCase();
+  const now = new Date().toISOString();
+
+  if (pool) {
+    const res = await pool.query(
+      `INSERT INTO users (name, email, phone, password_hash, role, google_id, auth_provider, profile_image_url, last_login_at, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'CUSTOMER', $5, 'GOOGLE', $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING id, name, email, phone, role, is_active, google_id, auth_provider, profile_image_url, created_at, last_login_at`,
+      [data.name.trim(), emailClean, data.phone || '', '', data.googleId, data.profileImageUrl || '']
+    );
+    return res.rows[0];
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  const newId = users.length > 0 ? Math.max(...users.map((u: any) => Number(u.id) || 0)) + 1 : 1;
+  const newUser = {
+    id: newId,
+    name: data.name.trim(),
+    email: emailClean,
+    phone: data.phone || '',
+    password_hash: '',
+    role: 'CUSTOMER',
+    is_active: true,
+    google_id: data.googleId,
+    auth_provider: 'GOOGLE',
+    profile_image_url: data.profileImageUrl || '',
+    last_login_at: now,
+    created_at: now,
+    updated_at: now
+  };
+  users.push(newUser);
+  writeJsonFile(USERS_FILE, users);
+  const { password_hash, ...safeUser } = newUser;
+  return safeUser;
+}
+
+export async function linkGoogleAccount(userId: number | string, googleId: string, profileImageUrl?: string): Promise<any> {
+  const now = new Date().toISOString();
+
+  if (pool) {
+    const res = await pool.query(
+      `UPDATE users
+       SET google_id = $1,
+           auth_provider = CASE WHEN auth_provider = 'LOCAL' THEN 'GOOGLE' ELSE auth_provider END,
+           profile_image_url = COALESCE(NULLIF($2, ''), profile_image_url),
+           last_login_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3 AND role = 'CUSTOMER'
+       RETURNING id, name, email, phone, role, is_active, google_id, auth_provider, profile_image_url, created_at, last_login_at`,
+      [googleId, profileImageUrl || '', userId]
+    );
+    return res.rows[0];
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  const idx = users.findIndex((u: any) => String(u.id) === String(userId));
+  if (idx >= 0) {
+    users[idx].google_id = googleId;
+    if (profileImageUrl) users[idx].profile_image_url = profileImageUrl;
+    users[idx].last_login_at = now;
+    users[idx].role = 'CUSTOMER'; // Security constraint
+    writeJsonFile(USERS_FILE, users);
+    const { password_hash, ...safeUser } = users[idx];
+    return safeUser;
+  }
+  return null;
+}
+
+export async function updateCustomerMobile(userId: number | string, phone: string): Promise<any> {
+  const phoneClean = phone.trim();
+
+  if (pool) {
+    const res = await pool.query(
+      `UPDATE users SET phone = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND role = 'CUSTOMER' RETURNING id, name, email, phone, role, is_active, google_id, auth_provider, profile_image_url, created_at, last_login_at`,
+      [phoneClean, userId]
+    );
+    return res.rows[0];
+  }
+
+  const users = readJsonFile(USERS_FILE, []);
+  const idx = users.findIndex((u: any) => String(u.id) === String(userId));
+  if (idx >= 0) {
+    users[idx].phone = phoneClean;
+    writeJsonFile(USERS_FILE, users);
+    const { password_hash, ...safeUser } = users[idx];
+    return safeUser;
+  }
+  return null;
 }
 

@@ -89,6 +89,10 @@ export interface CustomerUser {
   phone: string;
   role: 'CUSTOMER' | 'ADMIN' | string;
   is_active?: boolean;
+  google_id?: string;
+  auth_provider?: 'LOCAL' | 'GOOGLE' | string;
+  profile_image_url?: string;
+  last_login_at?: string;
   created_at?: string;
 }
 

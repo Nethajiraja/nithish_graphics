@@ -106,6 +106,42 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
     }
   };
 
+  // Mobile prompt state for Google users
+  const [mobileInput, setMobileInput] = useState('');
+  const [isSavingMobile, setIsSavingMobile] = useState(false);
+  const [mobileError, setMobileError] = useState<string | null>(null);
+
+  const handleMobileSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMobileError(null);
+    setIsSavingMobile(true);
+
+    try {
+      const res = await fetch('/api/customer/mobile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ phone: mobileInput })
+      });
+
+      const data = await res.json();
+      if (data.success && data.user) {
+        onUserUpdated(data.user);
+        if (data.token) {
+          localStorage.setItem('customer_token', data.token);
+        }
+      } else {
+        setMobileError(data.message || 'Failed to update mobile number.');
+      }
+    } catch (err: any) {
+      setMobileError('Connection error updating mobile number.');
+    } finally {
+      setIsSavingMobile(false);
+    }
+  };
+
   const totalOrdersCount = orders.length;
   const pendingOrdersCount = orders.filter(o => ['pending', 'confirmed', 'printing'].includes((o.order_status || o.status || '').toLowerCase())).length;
   const completedOrdersCount = orders.filter(o => ['ready', 'completed', 'delivered'].includes((o.order_status || o.status || '').toLowerCase())).length;
@@ -114,17 +150,30 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 selection:bg-orange-500 selection:text-white">
       {/* Welcome Banner */}
       <div className="bg-linear-to-r from-slate-900 via-blue-950 to-orange-950 text-white p-6 sm:p-8 rounded-2xl shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-        <div className="space-y-2">
-          <div className="flex items-center space-x-2 text-orange-400 font-bold text-xs uppercase tracking-wider">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Nithish Graphics Customer Dashboard</span>
+        <div className="flex items-center space-x-4">
+          {user.profile_image_url ? (
+            <img
+              src={user.profile_image_url}
+              alt={user.name}
+              className="w-14 h-14 rounded-2xl border-2 border-orange-400 object-cover shadow-md shrink-0"
+            />
+          ) : (
+            <div className="w-14 h-14 rounded-2xl bg-orange-600/40 border border-orange-500/50 flex items-center justify-center text-orange-300 font-extrabold text-xl shrink-0">
+              {user.name ? user.name.charAt(0).toUpperCase() : 'C'}
+            </div>
+          )}
+          <div className="space-y-1">
+            <div className="flex items-center space-x-2 text-orange-400 font-bold text-xs uppercase tracking-wider">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>Nithish Graphics Customer Dashboard</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+              Welcome back, <span className="text-orange-400">{user.name}</span>!
+            </h1>
+            <p className="text-xs text-slate-300">
+              Account: <span className="font-mono text-slate-200">{user.phone || 'Mobile not set'}</span> ({user.email}) • Provider: <span className="px-2 py-0.5 bg-blue-600/40 text-blue-200 rounded font-bold uppercase">{user.auth_provider || 'LOCAL'}</span>
+            </p>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-            Welcome back, <span className="text-orange-400">{user.name}</span>!
-          </h1>
-          <p className="text-xs text-slate-300">
-            Account: <span className="font-mono text-slate-200">{user.phone}</span> ({user.email}) • Role: <span className="px-2 py-0.5 bg-blue-600/40 text-blue-200 rounded font-bold">CUSTOMER</span>
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -145,6 +194,34 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Missing Mobile Number Alert Banner */}
+      {(!user.phone || user.phone.trim() === '') && (
+        <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-6 shadow-md space-y-3 animate-in fade-in">
+          <div className="flex items-center space-x-2 text-amber-950 font-bold text-xs sm:text-sm">
+            <AlertCircle className="w-5 h-5 text-orange-600 shrink-0" />
+            <span>Please add your 10-digit mobile number to complete your profile and place print orders:</span>
+          </div>
+          <form onSubmit={handleMobileSubmit} className="flex flex-col sm:flex-row items-center gap-3">
+            <input
+              type="tel"
+              required
+              placeholder="Enter 10-digit mobile number (e.g. 9876543210)"
+              value={mobileInput}
+              onChange={(e) => setMobileInput(e.target.value)}
+              className="w-full sm:w-80 px-4 py-2.5 rounded-xl border border-amber-300 focus:ring-2 focus:ring-orange-500 text-xs font-semibold text-slate-900 bg-white shadow-xs"
+            />
+            <button
+              type="submit"
+              disabled={isSavingMobile}
+              className="w-full sm:w-auto px-5 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl text-xs shadow-md transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
+            >
+              {isSavingMobile ? <span>Saving...</span> : <span>Save Mobile Number</span>}
+            </button>
+          </form>
+          {mobileError && <p className="text-xs text-red-600 font-semibold">{mobileError}</p>}
+        </div>
+      )}
 
       {/* Tabs Switcher */}
       <div className="flex border-b border-slate-200 bg-white rounded-xl p-1 shadow-xs text-xs font-bold">
