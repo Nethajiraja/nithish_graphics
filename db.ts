@@ -18,7 +18,10 @@ export const pool = connectionString
   : null;
 
 // In-memory / JSON file fallback if no PostgreSQL connection is present
-const FALLBACK_DIR = path.join(process.cwd(), '.data');
+const FALLBACK_DIR = process.env.VERCEL || process.env.TMPDIR
+  ? path.join(process.env.TMPDIR || '/tmp', '.data')
+  : path.join(process.cwd(), '.data');
+
 const ORDERS_FILE = path.join(FALLBACK_DIR, 'orders.json');
 const DOCUMENTS_FILE = path.join(FALLBACK_DIR, 'documents.json');
 const PRICING_FILE = path.join(FALLBACK_DIR, 'pricing.json');
@@ -27,18 +30,22 @@ const ADMINS_FILE = path.join(FALLBACK_DIR, 'admins.json');
 const USERS_FILE = path.join(FALLBACK_DIR, 'users.json');
 
 function ensureFallbackStorage() {
-  if (!fs.existsSync(FALLBACK_DIR)) {
-    fs.mkdirSync(FALLBACK_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(FALLBACK_DIR)) {
+      fs.mkdirSync(FALLBACK_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.warn("Storage directory fallback warning:", err);
   }
 }
 
 function readJsonFile(filePath: string, defaultData: any) {
   ensureFallbackStorage();
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, JSON.stringify(defaultData, null, 2));
-    return defaultData;
-  }
   try {
+    if (!fs.existsSync(filePath)) {
+      try { fs.writeFileSync(filePath, JSON.stringify(defaultData, null, 2)); } catch (e) {}
+      return defaultData;
+    }
     const raw = fs.readFileSync(filePath, 'utf-8');
     return JSON.parse(raw);
   } catch (err) {
@@ -48,7 +55,11 @@ function readJsonFile(filePath: string, defaultData: any) {
 
 function writeJsonFile(filePath: string, data: any) {
   ensureFallbackStorage();
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.warn("writeJsonFile warning:", err);
+  }
 }
 
 // Initial Data Seeds
