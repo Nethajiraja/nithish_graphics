@@ -38,7 +38,7 @@ export const defaultServices: ServiceItem[] = [
     shortDesc: "Vibrant full-color printing for presentations, charts, certificates, and graphics.",
     fullDesc: "Get premium color printing services at Nithish Graphics. We deliver true-to-life color accuracy for college record sheets, diagrams, brochures, project submissions, posters, and flyers with glossy or matte finishing.",
     iconName: "Palette",
-    startingPrice: "₹5.00 / page",
+    startingPrice: "₹10.00 / page",
     features: [
       "High-definition HD color output on premium photo & bond paper",
       "Vibrant photo paper & glossy card stock available",
@@ -54,7 +54,7 @@ export const defaultServices: ServiceItem[] = [
     shortDesc: "Instant PDF file printing directly from phone, WhatsApp, email, or USB drive.",
     fullDesc: "Seamlessly print your digital PDF files at Nithish Graphics. Upload your PDF documents directly via our website or send them over WhatsApp to get instant printing with auto page count & cost preview.",
     iconName: "FileUp",
-    startingPrice: "₹1.00 / page",
+    startingPrice: "₹2.00 / page",
     features: [
       "Instant online PDF upload & page calculator",
       "Supports multipage PDFs, e-books, slide decks, and manual forms",
@@ -70,7 +70,7 @@ export const defaultServices: ServiceItem[] = [
     shortDesc: "Durable PVC spiral & wire-o binding with clear protective front and back covers.",
     fullDesc: "Keep your notes, study modules, project books, and manuals organized with professional spiral binding from Nithish Graphics. Available with heavy-gauge plastic spirals and transparent protective covers.",
     iconName: "BookOpen",
-    startingPrice: "₹30.00 / book",
+    startingPrice: "₹40.00 / book",
     features: [
       "High-durability flexible PVC plastic coil & metal twin-wire options",
       "Includes thick transparent plastic sheet cover & heavy back board",
@@ -86,7 +86,7 @@ export const defaultServices: ServiceItem[] = [
     shortDesc: "Hardcover college record binding with gold/silver foil title embossing.",
     fullDesc: "Nithish Graphics specializes in academic record binding for engineering, medical, polytechnic, and arts colleges. We provide sturdy hardcover binding with gold lettering embossing for lab records, project reports, and theses.",
     iconName: "BookMarked",
-    startingPrice: "₹150.00 / record",
+    startingPrice: "₹80.00 / record",
     features: [
       "Heavy-duty cloth/leatherette hardcover binding",
       "Custom gold foil lettering and emblem embossing",
@@ -102,7 +102,7 @@ export const defaultServices: ServiceItem[] = [
     shortDesc: "Clean thermal glued softcover binding for project reports & workbooks.",
     fullDesc: "Sleek softcover binding (thermal glued or taped) at Nithish Graphics gives your project reports, handbooks, dissertations, and corporate documents a polished paperback finish.",
     iconName: "Layers",
-    startingPrice: "₹40.00 / book",
+    startingPrice: "₹50.00 / book",
     features: [
       "Thermal glue soft cover perfect binding",
       "Printed cardstock outer cover with laminate film option",
@@ -119,8 +119,8 @@ export const defaultPricingRates: PricingRate[] = [
     category: "B/W Printing",
     name: "A4 B/W Printing (70 GSM)",
     unit: "per page",
-    priceSingle: 1.50,
-    priceDouble: 1.00,
+    priceSingle: 2.00,
+    priceDouble: 1.50,
     description: "Standard paper for daily study notes and general documents."
   },
   {
@@ -128,8 +128,8 @@ export const defaultPricingRates: PricingRate[] = [
     category: "B/W Printing",
     name: "A4 B/W Printing (80 GSM Executive)",
     unit: "per page",
-    priceSingle: 2.00,
-    priceDouble: 1.50,
+    priceSingle: 3.00,
+    priceDouble: 2.00,
     description: "Thicker premium bond paper for project reports and official documents."
   },
   {
@@ -137,8 +137,8 @@ export const defaultPricingRates: PricingRate[] = [
     category: "Color Printing",
     name: "A4 Color Printing (Standard)",
     unit: "per page",
-    priceSingle: 6.00,
-    priceDouble: 5.00,
+    priceSingle: 10.00,
+    priceDouble: 8.00,
     description: "HD inkjet color printing for charts, diagrams, and assignments."
   },
   {
@@ -155,7 +155,7 @@ export const defaultPricingRates: PricingRate[] = [
     category: "Binding Services",
     name: "Spiral Binding (Up to 150 Pages)",
     unit: "per document",
-    priceSingle: 30.00,
+    priceSingle: 40.00,
     description: "PVC spiral coil with front transparent cover & back card."
   },
   {
@@ -171,7 +171,7 @@ export const defaultPricingRates: PricingRate[] = [
     category: "Binding Services",
     name: "Soft / Thermal Tape Binding",
     unit: "per book",
-    priceSingle: 45.00,
+    priceSingle: 50.00,
     description: "Clean taped spine softcover for project reports."
   },
   {
