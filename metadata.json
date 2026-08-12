@@ -1,0 +1,6 @@
+{
+  "name": "Nithish Graphics",
+  "description": "Nithish Graphics provides B/W printing, color printing, PDF printing, notes printing, record printing, spiral binding, soft binding and record binding services.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
