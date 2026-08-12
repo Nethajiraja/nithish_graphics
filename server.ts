@@ -25,7 +25,7 @@ import {
   getAllCustomers,
   toggleCustomerActive,
   getOrdersForCustomer
-} from './db';
+} from './db.js';
 
 dotenv.config();
 
