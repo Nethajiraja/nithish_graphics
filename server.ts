@@ -34,10 +34,15 @@ const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 const JWT_SECRET = process.env.JWT_SECRET || 'nithish_graphics_jwt_secret_key_2026';
 
-// Base Directory for Uploads
-const UPLOADS_BASE_DIR = path.join(process.cwd(), 'uploads');
+// Base Directory for Uploads (uses /tmp/uploads when deployed on Vercel serverless)
+const UPLOADS_BASE_DIR = process.env.VERCEL || process.env.TMPDIR
+  ? path.join(process.env.TMPDIR || '/tmp', 'uploads')
+  : path.join(process.cwd(), 'uploads');
+
 if (!fs.existsSync(UPLOADS_BASE_DIR)) {
-  fs.mkdirSync(UPLOADS_BASE_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(UPLOADS_BASE_DIR, { recursive: true });
+  } catch (e) {}
 }
 
 // Multer Storage Engine preserving original filename & extension inside uploads/orders/{orderId}/
@@ -186,7 +191,11 @@ async function sendWhatsAppCloudApiNotification(orderData: any, downloadLinks: s
   }
 }
 
-async function startServer() {
+let appInstance: express.Express | null = null;
+
+export async function createApp() {
+  if (appInstance) return appInstance;
+
   // Initialize Database / Local Storage
   await initDatabase();
 
@@ -804,24 +813,31 @@ Sitemap: ${domain}/sitemap.xml
     res.json({ success: true, config: updated });
   });
 
-  // ==================== VITE / STATIC SERVING ====================
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa'
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req: Request, res: Response) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+  appInstance = app;
+  return app;
+}
+
+async function startServer() {
+  const app = await createApp();
+  if (!process.env.VERCEL) {
+    if (process.env.NODE_ENV !== 'production') {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa'
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), 'dist');
+      app.use(express.static(distPath));
+      app.get('*', (req: Request, res: Response) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
+
+    app.listen(Number(PORT), HOST, () => {
+      console.log(`Nithish Graphics server running at http://${HOST}:${PORT}`);
     });
   }
-
-  app.listen(Number(PORT), HOST, () => {
-    console.log(`Nithish Graphics server running at http://${HOST}:${PORT}`);
-  });
 }
 
 startServer().catch((err) => {
